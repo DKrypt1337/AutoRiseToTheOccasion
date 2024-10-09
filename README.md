@@ -1,5 +1,5 @@
-#                                     AutoRiseToTheOccasion
-========================================================================================================
+# AutoRiseToTheOccasion
+===========================================================================================
 
 A Burp Suite extension for automating HTTP requests to help test for BOLA/IDOR issues
 
