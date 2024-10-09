@@ -4,3 +4,11 @@
 /pom.xml
 /target
 /src/*.class
+AutoRiseCookie.class
+AutoRiseHttpListener.class
+AutoRiseHttpListener$1.class
+AutoRiseIHttpRequestResponse.class
+AutoRiseRequestListSelectionListener.class
+AutoRiseRequestPanel.class
+AutoRiseTableMouseListener.class
+AutoRiseToTheOccasion.class

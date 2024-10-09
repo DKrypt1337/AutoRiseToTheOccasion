@@ -1,4 +1,3 @@
-
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -17,8 +16,10 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
+import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.table.DefaultTableModel;
 
 import burp.IBurpExtender;
 import burp.IBurpExtenderCallbacks;
@@ -39,17 +40,16 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
     public ITextEditor[] modifiedResponseViewers;
     public IBurpExtenderCallbacks callbacks;
     public IExtensionHelpers helpers;
-    @SuppressWarnings("rawtypes")
-    public DefaultListModel[] requestLists;
-    @SuppressWarnings("rawtypes")
-    public JList[] requestJLists;
+    public DefaultTableModel[] tableModels;
+    public JTable[] tables;
     public JScrollPane[] requestScrollPanes;
     public JPanel[] requestPanels;
     public Map<String, IHttpRequestResponse> requestMap;
     public JPanel mainPanel;
     public JTabbedPane tabbedPane;
+    public DefaultListModel[] requestLists;
+    public JList[] requestJLists;
 
-    @SuppressWarnings({ "rawtypes", "unchecked" })
     @Override
     public void registerExtenderCallbacks(IBurpExtenderCallbacks callbacks) {
         this.callbacks = callbacks;
@@ -59,8 +59,6 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
         this.requestMap = new HashMap<>();
 
         // Create UI components
-        this.requestLists = new DefaultListModel[10];
-        this.requestJLists = new JList[10];
         this.requestScrollPanes = new JScrollPane[10];
         this.requestPanels = new JPanel[10];
         this.roleTextFields = new JTextField[10];
@@ -73,12 +71,27 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
         this.authorizationCheckBoxes = new JCheckBox[10];
         this.monitorCheckBoxes = new JCheckBox[10];
 
+        // Create table models and tables
+        this.tableModels = new DefaultTableModel[10];
+        this.tables = new JTable[10];
+
         for (int i = 0; i < 10; i++) {
-            this.requestLists[i] = new DefaultListModel();
-            this.requestJLists[i] = new JList(this.requestLists[i]);
-            this.requestJLists[i].addListSelectionListener(new AutoRiseRequestListSelectionListener(i, this));
-            this.requestScrollPanes[i] = new JScrollPane(this.requestJLists[i]);
+            // Create table model
+            this.tableModels[i] = new DefaultTableModel();
+            this.tableModels[i].addColumn("ID");
+            this.tableModels[i].addColumn("HTTP Method");
+            this.tableModels[i].addColumn("Full URL");
+            this.tableModels[i].addColumn("Auth Status");
+            this.tableModels[i].addColumn("HTTP Return Code");
+
+            // Create table
+            this.tables[i] = new JTable(this.tableModels[i]);
+            this.tables[i].addMouseListener(new AutoRiseTableMouseListener(i, this));
+
+            // Create scroll pane for table
+            this.requestScrollPanes[i] = new JScrollPane(this.tables[i]);
             this.requestScrollPanes[i].setPreferredSize(new Dimension(300, 600));
+
             this.requestViewers[i] = callbacks.createTextEditor();
             this.modifiedRequestViewers[i] = callbacks.createTextEditor();
             this.responseViewers[i] = callbacks.createTextEditor();
@@ -86,7 +99,6 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
 
             this.requestPanels[i] = new JPanel(new BorderLayout());
 
-            // Create nested tabbed panes for original and modified requests
             // Create nested tabbed panes for original and modified requests
             JTabbedPane originalTabbedPane = new JTabbedPane();
             originalTabbedPane.addTab("Request", new JScrollPane(this.requestViewers[i].getComponent()));
@@ -161,7 +173,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
 
         // Register HTTP listener
         callbacks.setExtensionName("AutoRiseToTheOccasion");
-        callbacks.registerHttpListener(new AutoRiseHttpListener(this));
+        callbacks.registerHttpListener(new AutoRiseHttpListener(this, this.tableModels));
 
         // Add custom tab to Burp Suite
         callbacks.addSuiteTab(this);

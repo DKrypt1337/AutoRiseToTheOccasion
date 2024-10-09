@@ -5,13 +5,13 @@ import java.util.Date;
 import burp.ICookie;
 
 public class AutoRiseCookie implements ICookie {
-  private final String name;
-  private final String value;
-  private final String domain;
-  private final String path;
-  private final long expiration;
-  private final boolean secure;
-  private final boolean httpOnly;
+  private String name;
+  private String value;
+  private String domain;
+  private String path;
+  private long expiration;
+  private boolean secure;
+  private boolean httpOnly;
 
   public AutoRiseCookie(String name, String value, String domain, String path, long expiration) {
     this.name = name;

@@ -1,15 +1,19 @@
 import java.net.URL;
 
+import javax.swing.table.DefaultTableModel;
+
 import burp.IHttpListener;
 import burp.IHttpRequestResponse;
 import burp.IHttpService;
 import burp.IRequestInfo;
 
 public class AutoRiseHttpListener implements IHttpListener {
-    private final AutoRiseToTheOccasion extension;
+    public AutoRiseToTheOccasion extension;
+    public DefaultTableModel[] tableModels;
 
-    public AutoRiseHttpListener(AutoRiseToTheOccasion extension) {
+   public AutoRiseHttpListener(AutoRiseToTheOccasion extension, DefaultTableModel[] tableModels) {
         this.extension = extension;
+        this.tableModels = tableModels;
     }
 
     @SuppressWarnings("unchecked")
