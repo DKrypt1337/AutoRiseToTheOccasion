@@ -1,0 +1,2 @@
+Extension-Name: AutoRiseToTheOccasion
+Name: src/AutoRiseToTheOccasion.class
