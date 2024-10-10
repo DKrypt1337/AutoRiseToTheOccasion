@@ -3,6 +3,7 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
+import java.io.PrintWriter;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -29,26 +30,28 @@ import burp.ITab;
 import burp.ITextEditor;
 
 public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
-    public JTextField[] roleTextFields;
-    public JTextField[] authorizationTextFields;
-    public JCheckBox[] roleCheckBoxes;
-    public JCheckBox[] authorizationCheckBoxes;
-    public JCheckBox[] monitorCheckBoxes;
-    public ITextEditor[] requestViewers;
-    public ITextEditor[] modifiedRequestViewers;
-    public ITextEditor[] responseViewers;
-    public ITextEditor[] modifiedResponseViewers;
-    public IBurpExtenderCallbacks callbacks;
-    public IExtensionHelpers helpers;
-    public DefaultTableModel[] tableModels;
-    public JTable[] tables;
-    public JScrollPane[] requestScrollPanes;
-    public JPanel[] requestPanels;
-    public Map<String, IHttpRequestResponse> requestMap;
-    public JPanel mainPanel;
-    public JTabbedPane tabbedPane;
-    public DefaultListModel[] requestLists;
-    public JList[] requestJLists;
+    private JTextField[] roleTextFields;
+    private JTextField[] authorizationTextFields;
+    private JCheckBox[] roleCheckBoxes;
+    private JCheckBox[] authorizationCheckBoxes;
+    private JCheckBox[] monitorCheckBoxes;
+    private ITextEditor[] requestViewers;
+    private ITextEditor[] modifiedRequestViewers;
+    private ITextEditor[] responseViewers;
+    private ITextEditor[] modifiedResponseViewers;
+    private IBurpExtenderCallbacks callbacks;
+    private IExtensionHelpers helpers;
+    private DefaultTableModel[] tableModels;
+    private JTable[] tables;
+    private JScrollPane[] requestScrollPanes;
+    private JPanel[] requestPanels;
+    private Map<String, IHttpRequestResponse> requestMap;
+    private JPanel mainPanel;
+    private JTabbedPane tabbedPane;
+    private DefaultListModel[] requestLists;
+    private JList[] requestJLists;
+    private PrintWriter stdout;
+    private PrintWriter stderr;
 
     @Override
     public void registerExtenderCallbacks(IBurpExtenderCallbacks callbacks) {
@@ -58,6 +61,25 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
         this.tabbedPane = new JTabbedPane();
         this.requestMap = new HashMap<>();
 
+        // Obtain our output and error streams
+        stdout = new PrintWriter(callbacks.getStdout(), true);
+        stderr = new PrintWriter(callbacks.getStderr(), true);
+
+        // Log extension loading
+        stdout.println("Extension loaded.");
+
+        // Initialize UI components
+        initializeUIComponents();
+
+        // Add custom tab to Burp Suite
+        callbacks.addSuiteTab(this);
+
+        // Register HTTP listener
+        callbacks.setExtensionName("AutoRiseToTheOccasion");
+        callbacks.registerHttpListener(new AutoRiseHttpListener(this, this.tableModels));
+    }
+
+    private void initializeUIComponents() {
         // Create UI components
         this.requestScrollPanes = new JScrollPane[10];
         this.requestPanels = new JPanel[10];
@@ -70,6 +92,8 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
         this.authorizationTextFields = new JTextField[10];
         this.authorizationCheckBoxes = new JCheckBox[10];
         this.monitorCheckBoxes = new JCheckBox[10];
+        this.requestLists = new DefaultListModel[10];
+        this.requestJLists = new JList[10];
 
         // Create table models and tables
         this.tableModels = new DefaultTableModel[10];
@@ -99,6 +123,17 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
 
             this.requestPanels[i] = new JPanel(new BorderLayout());
 
+            this.requestLists[i] = new DefaultListModel();
+            this.requestJLists[i] = new JList(this.requestLists[i]);
+            this.requestJLists[i].addListSelectionListener(new AutoRiseRequestListSelectionListener(i, this));    
+            
+            // Create scroll pane for list
+            JScrollPane listScrollPane = new JScrollPane(this.requestJLists[i]);
+            listScrollPane.setPreferredSize(new Dimension(300, 600));
+
+            // Add table to request panel
+            this.requestPanels[i].add(this.requestScrollPanes[i], BorderLayout.CENTER);
+
             // Create nested tabbed panes for original and modified requests
             JTabbedPane originalTabbedPane = new JTabbedPane();
             originalTabbedPane.addTab("Request", new JScrollPane(this.requestViewers[i].getComponent()));
@@ -113,7 +148,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
             requestTabbedPane.addTab("Modified Request", modifiedTabbedPane);
             
             JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
-            splitPane.setTopComponent(this.requestScrollPanes[i]); // Request list on top
+            splitPane.setTopComponent(listScrollPane); // Request list on top
             splitPane.setBottomComponent(requestTabbedPane); // Request/Response tabs at the bottom
             splitPane.setDividerLocation(300); // Adjust as needed
             this.requestPanels[i].add(splitPane, BorderLayout.CENTER);
@@ -170,13 +205,95 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
 
         // Add tabs to main panel
         this.mainPanel.add(this.tabbedPane, BorderLayout.CENTER);
+    }
 
-        // Register HTTP listener
-        callbacks.setExtensionName("AutoRiseToTheOccasion");
-        callbacks.registerHttpListener(new AutoRiseHttpListener(this, this.tableModels));
+    // Getter methods for private fields
+    public JTextField[] getRoleTextFields() {
+        return roleTextFields;
+    }
 
-        // Add custom tab to Burp Suite
-        callbacks.addSuiteTab(this);
+    public JTextField[] getAuthorizationTextFields() {
+        return authorizationTextFields;
+    }
+
+    public JCheckBox[] getRoleCheckBoxes() {
+        return roleCheckBoxes;
+    }
+
+    public JCheckBox[] getAuthorizationCheckBoxes() {
+        return authorizationCheckBoxes;
+    }
+
+    public JCheckBox[] getMonitorCheckBoxes() {
+        return monitorCheckBoxes;
+    }
+
+    public ITextEditor[] getRequestViewers() {
+        return requestViewers;
+    }
+
+    public ITextEditor[] getModifiedRequestViewers() {
+        return modifiedRequestViewers;
+    }
+
+    public ITextEditor[] getResponseViewers() {
+        return responseViewers;
+    }
+
+    public ITextEditor[] getModifiedResponseViewers() {
+        return modifiedResponseViewers;
+    }
+
+    public IBurpExtenderCallbacks getCallbacks() {
+        return callbacks;
+    }
+
+    public IExtensionHelpers getHelpers() {
+        return helpers;
+    }
+
+    public DefaultTableModel[] getTableModels() {
+        return tableModels;
+    }
+
+    public JTable[] getTables() {
+        return tables;
+    }
+
+    public JScrollPane[] getRequestScrollPanes() {
+        return requestScrollPanes;
+    }
+
+    public JPanel[] getRequestPanels() {
+        return requestPanels;
+    }
+
+    public Map<String, IHttpRequestResponse> getRequestMap() {
+        return requestMap;
+    }
+
+    public JPanel getMainPanel() {
+        return mainPanel;
+    }
+
+    public JTabbedPane getTabbedPane() {
+        return tabbedPane;
+    }
+
+    public DefaultListModel[] getRequestLists() {
+        return requestLists;
+    }
+
+    public JList[] getRequestJLists() {
+        return requestJLists;
+    }
+
+    public PrintWriter getStdout() {
+        return stdout;
+    }
+
+    public PrintWriter getStderr() {
+        return stderr;
     }
 
     @Override

@@ -19,20 +19,20 @@ public class AutoRiseHttpListener implements IHttpListener {
     @SuppressWarnings("unchecked")
     @Override
     public void processHttpMessage(int toolFlag, boolean messageIsRequest, IHttpRequestResponse messageInfo) {
-        IRequestInfo requestInfo = extension.helpers.analyzeRequest(messageInfo);
+        IRequestInfo requestInfo = extension.getHelpers().analyzeRequest(messageInfo);
         String url = requestInfo.getUrl().toString();
 
         if (messageIsRequest) {
             // Process request
-            extension.requestMap.put(url, messageInfo);
+            extension.getRequestMap().put(url, messageInfo);
             for (int i = 0; i < 10; i++) {
-                if (extension.monitorCheckBoxes[i].isSelected()) {
-                    extension.requestLists[i].addElement(url);
+                if (extension.getMonitorCheckBoxes()[i].isSelected()) {
+                    extension.getRequestLists()[i].addElement(url);
                 }
             }
         } else {
             // Process response
-            IHttpRequestResponse storedMessageInfo = extension.requestMap.get(url);
+            IHttpRequestResponse storedMessageInfo = extension.getRequestMap().get(url);
             if (storedMessageInfo != null) {
                 // Create a new IHttpRequestResponse object that includes the response
                 IHttpRequestResponse updatedMessageInfo = new IHttpRequestResponse() {
@@ -99,7 +99,7 @@ public class AutoRiseHttpListener implements IHttpListener {
                     @Override
                     public void setPort(int port) {
                         IHttpService service = storedMessageInfo.getHttpService();
-                        IHttpService newService = extension.helpers.buildHttpService(service.getHost(), port, service.getProtocol());
+                        IHttpService newService = extension.getHelpers().buildHttpService(service.getHost(), port, service.getProtocol());
                         storedMessageInfo.setHttpService(newService);
                     }
 
@@ -111,7 +111,7 @@ public class AutoRiseHttpListener implements IHttpListener {
                     @Override
                     public void setProtocol(String protocol) {
                         IHttpService service = storedMessageInfo.getHttpService();
-                        IHttpService newService = extension.helpers.buildHttpService(service.getHost(), service.getPort(), protocol);
+                        IHttpService newService = extension.getHelpers().buildHttpService(service.getHost(), service.getPort(), protocol);
                         storedMessageInfo.setHttpService(newService);
                     }
 
@@ -123,7 +123,7 @@ public class AutoRiseHttpListener implements IHttpListener {
                     @Override
                     public void setHost(String host) {
                         IHttpService service = storedMessageInfo.getHttpService();
-                        IHttpService newService = extension.helpers.buildHttpService(host, service.getPort(), service.getProtocol());
+                        IHttpService newService = extension.getHelpers().buildHttpService(host, service.getPort(), service.getProtocol());
                         storedMessageInfo.setHttpService(newService);
                     }
 
@@ -132,7 +132,7 @@ public class AutoRiseHttpListener implements IHttpListener {
                         return messageInfo.getStatusCode();
                     }
                 };
-                extension.requestMap.put(url, updatedMessageInfo);
+                extension.getRequestMap().put(url, updatedMessageInfo);
             }
         }
     }

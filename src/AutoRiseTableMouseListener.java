@@ -15,15 +15,15 @@ public class AutoRiseTableMouseListener extends MouseAdapter {
     @Override
     public void mouseClicked(MouseEvent e) {
         // Handle the selection of rows
-        int row = extension.tables[userListIndex].getSelectedRow();
+        int row = extension.getTables()[userListIndex].getSelectedRow();
         if (row != -1) {
             // Get the selected row data
-            String url = (String) extension.tableModels[userListIndex].getValueAt(row, 2);
-            IHttpRequestResponse requestResponse = extension.requestMap.get(url);
+            String url = (String) extension.getTableModels()[userListIndex].getValueAt(row, 2);
+            IHttpRequestResponse requestResponse = extension.getRequestMap().get(url);
             if (requestResponse != null) {
                 // Update the request and response viewers
-                extension.requestViewers[userListIndex].setText(requestResponse.getRequest());
-                extension.responseViewers[userListIndex].setText(requestResponse.getResponse());
+                extension.getRequestViewers()[userListIndex].setText(requestResponse.getRequest());
+                extension.getResponseViewers()[userListIndex].setText(requestResponse.getResponse());
             }
         }
     }
