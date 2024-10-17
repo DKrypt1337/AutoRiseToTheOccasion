@@ -1,39 +1,37 @@
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.GridLayout;
 import java.io.PrintWriter;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
 
-import javax.swing.Box;
-import javax.swing.BoxLayout;
-import javax.swing.DefaultListModel;
+import javax.swing.DefaultListSelectionModel;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
-import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTable;
-import javax.swing.JTextArea;
-import javax.swing.JTextField;
+import javax.swing.event.ListSelectionEvent;
+import javax.swing.event.ListSelectionListener;
 import javax.swing.table.DefaultTableModel;
 
 import burp.IBurpExtender;
 import burp.IBurpExtenderCallbacks;
 import burp.IExtensionHelpers;
+import burp.IHttpListener;
 import burp.IHttpRequestResponse;
+import burp.IRequestInfo;
 import burp.ITab;
 import burp.ITextEditor;
 
-public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
-    private JTextField[] roleTextFields;
-    private JTextField[] authorizationTextFields;
+public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelectionListener {
     private JCheckBox[] roleCheckBoxes;
-    private JCheckBox[] authorizationCheckBoxes;
+    private JCheckBox[] enableCookiesCheckBoxes;
+    private JCheckBox[] enableAuthorizationCheckBoxes;
     private JCheckBox[] monitorCheckBoxes;
     private ITextEditor[] requestViewers;
     private ITextEditor[] modifiedRequestViewers;
@@ -48,10 +46,20 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
     private Map<String, IHttpRequestResponse> requestMap;
     private JPanel mainPanel;
     private JTabbedPane tabbedPane;
-    private DefaultListModel[] requestLists;
-    private JList[] requestJLists;
     private PrintWriter stdout;
     private PrintWriter stderr;
+    private int requestCounter;
+    private final Map<Integer, Map<Integer, IHttpRequestResponse>> userRequestResponseMap = new HashMap<>();
+
+    public void logInfo(String message) {
+        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"));
+        stdout.println("[" + timestamp + "] INFO: " + message);
+    }
+
+    public void logError(String message) {
+        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"));
+        stdout.println("[" + timestamp + "] ERROR: " + message);
+    }
 
     @Override
     public void registerExtenderCallbacks(IBurpExtenderCallbacks callbacks) {
@@ -60,240 +68,235 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
         this.mainPanel = new JPanel(new BorderLayout());
         this.tabbedPane = new JTabbedPane();
         this.requestMap = new HashMap<>();
+        this.requestCounter = 0;
 
         // Obtain our output and error streams
         stdout = new PrintWriter(callbacks.getStdout(), true);
         stderr = new PrintWriter(callbacks.getStderr(), true);
 
-        // Log extension loading
-        stdout.println("Extension loaded.");
+        // Initialize arrays
+        int userCount = 10;
+        roleCheckBoxes = new JCheckBox[userCount];
+        enableCookiesCheckBoxes = new JCheckBox[userCount];
+        enableAuthorizationCheckBoxes = new JCheckBox[userCount];
+        monitorCheckBoxes = new JCheckBox[userCount];
+        requestViewers = new ITextEditor[userCount];
+        modifiedRequestViewers = new ITextEditor[userCount];
+        responseViewers = new ITextEditor[userCount];
+        modifiedResponseViewers = new ITextEditor[userCount];
+        tableModels = new DefaultTableModel[userCount];
+        tables = new JTable[userCount];
+        requestPanels = new JPanel[userCount];
 
-        // Initialize UI components
-        initializeUIComponents();
+        // Initialize components for each user
+        for (int i = 0; i < userCount; i++) {
+            roleCheckBoxes[i] = new JCheckBox("Enable Role");
+            enableCookiesCheckBoxes[i] = new JCheckBox("Enable Cookies");
+            enableAuthorizationCheckBoxes[i] = new JCheckBox("Enable Authorization");
+            monitorCheckBoxes[i] = new JCheckBox("Monitor");
 
-        // Add custom tab to Burp Suite
-        callbacks.addSuiteTab(this);
+            requestViewers[i] = callbacks.createTextEditor();
+            modifiedRequestViewers[i] = callbacks.createTextEditor();
+            responseViewers[i] = callbacks.createTextEditor();
+            modifiedResponseViewers[i] = callbacks.createTextEditor();
 
-        // Register HTTP listener
-        callbacks.setExtensionName("AutoRiseToTheOccasion");
-        callbacks.registerHttpListener(new AutoRiseHttpListener(this, this.tableModels));
-    }
+            tableModels[i] = new DefaultTableModel(new Object[]{"ID", "Method", "URL", "Status"}, 0);
+            tables[i] = new JTable(tableModels[i]);
+            tables[i].getSelectionModel().addListSelectionListener(this);
 
-    private void initializeUIComponents() {
-        // Create UI components
-        this.requestScrollPanes = new JScrollPane[10];
-        this.requestPanels = new JPanel[10];
-        this.roleTextFields = new JTextField[10];
-        this.roleCheckBoxes = new JCheckBox[10];
-        this.requestViewers = new ITextEditor[10];
-        this.modifiedRequestViewers = new ITextEditor[10];
-        this.responseViewers = new ITextEditor[10];
-        this.modifiedResponseViewers = new ITextEditor[10];
-        this.authorizationTextFields = new JTextField[10];
-        this.authorizationCheckBoxes = new JCheckBox[10];
-        this.monitorCheckBoxes = new JCheckBox[10];
-        this.requestLists = new DefaultListModel[10];
-        this.requestJLists = new JList[10];
+            // Set fixed sizes for the table
+            tables[i].setPreferredScrollableViewportSize(new Dimension(500, 200));
+            tables[i].setFillsViewportHeight(true);
 
-        // Create table models and tables
-        this.tableModels = new DefaultTableModel[10];
-        this.tables = new JTable[10];
+            JPanel userPanel = new JPanel(new BorderLayout());
+            JPanel checkBoxPanel = new JPanel(new GridLayout(1, 4));
+            checkBoxPanel.add(roleCheckBoxes[i]);
+            checkBoxPanel.add(enableCookiesCheckBoxes[i]);
+            checkBoxPanel.add(enableAuthorizationCheckBoxes[i]);
+            checkBoxPanel.add(monitorCheckBoxes[i]);
 
-        for (int i = 0; i < 10; i++) {
-            // Create table model
-            this.tableModels[i] = new DefaultTableModel();
-            this.tableModels[i].addColumn("ID");
-            this.tableModels[i].addColumn("HTTP Method");
-            this.tableModels[i].addColumn("Full URL");
-            this.tableModels[i].addColumn("Auth Status");
-            this.tableModels[i].addColumn("HTTP Return Code");
+            userPanel.add(checkBoxPanel, BorderLayout.NORTH);
+            userPanel.add(new JScrollPane(tables[i]), BorderLayout.CENTER);
 
-            // Create table
-            this.tables[i] = new JTable(this.tableModels[i]);
-            this.tables[i].addMouseListener(new AutoRiseTableMouseListener(i, this));
+            JTabbedPane requestResponseTabbedPane = new JTabbedPane();
+            JPanel originalPanel = new JPanel(new GridLayout(2, 1));
+            originalPanel.add(new JScrollPane(requestViewers[i].getComponent()));
+            originalPanel.add(new JScrollPane(responseViewers[i].getComponent()));
+            requestResponseTabbedPane.addTab("Original", originalPanel);
 
-            // Create scroll pane for table
-            this.requestScrollPanes[i] = new JScrollPane(this.tables[i]);
-            this.requestScrollPanes[i].setPreferredSize(new Dimension(300, 600));
+            JPanel modifiedPanel = new JPanel(new GridLayout(2, 1));
+            modifiedPanel.add(new JScrollPane(modifiedRequestViewers[i].getComponent()));
+            modifiedPanel.add(new JScrollPane(modifiedResponseViewers[i].getComponent()));
+            requestResponseTabbedPane.addTab("Modified", modifiedPanel);
 
-            this.requestViewers[i] = callbacks.createTextEditor();
-            this.modifiedRequestViewers[i] = callbacks.createTextEditor();
-            this.responseViewers[i] = callbacks.createTextEditor();
-            this.modifiedResponseViewers[i] = callbacks.createTextEditor();
+            // Set fixed sizes for the request/response viewers
+            requestViewers[i].getComponent().setPreferredSize(new Dimension(500, 200));
+            responseViewers[i].getComponent().setPreferredSize(new Dimension(500, 200));
+            modifiedRequestViewers[i].getComponent().setPreferredSize(new Dimension(500, 200));
+            modifiedResponseViewers[i].getComponent().setPreferredSize(new Dimension(500, 200));
 
-            this.requestPanels[i] = new JPanel(new BorderLayout());
+            userPanel.add(requestResponseTabbedPane, BorderLayout.SOUTH);
 
-            this.requestLists[i] = new DefaultListModel();
-            this.requestJLists[i] = new JList(this.requestLists[i]);
-            this.requestJLists[i].addListSelectionListener(new AutoRiseRequestListSelectionListener(i, this));    
-            
-            // Create scroll pane for list
-            JScrollPane listScrollPane = new JScrollPane(this.requestJLists[i]);
-            listScrollPane.setPreferredSize(new Dimension(300, 600));
+            tabbedPane.addTab("User " + (i + 1), userPanel);
 
-            // Add table to request panel
-            this.requestPanels[i].add(this.requestScrollPanes[i], BorderLayout.CENTER);
-
-            // Create nested tabbed panes for original and modified requests
-            JTabbedPane originalTabbedPane = new JTabbedPane();
-            originalTabbedPane.addTab("Request", new JScrollPane(this.requestViewers[i].getComponent()));
-            originalTabbedPane.addTab("Response", new JScrollPane(this.responseViewers[i].getComponent()));
-
-            JTabbedPane modifiedTabbedPane = new JTabbedPane();
-            modifiedTabbedPane.addTab("Request", new JScrollPane(this.modifiedRequestViewers[i].getComponent()));
-            modifiedTabbedPane.addTab("Response", new JScrollPane(this.modifiedResponseViewers[i].getComponent()));
-
-            JTabbedPane requestTabbedPane = new JTabbedPane();
-            requestTabbedPane.addTab("Original Request", originalTabbedPane);
-            requestTabbedPane.addTab("Modified Request", modifiedTabbedPane);
-            
-            JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
-            splitPane.setTopComponent(listScrollPane); // Request list on top
-            splitPane.setBottomComponent(requestTabbedPane); // Request/Response tabs at the bottom
-            splitPane.setDividerLocation(300); // Adjust as needed
-            this.requestPanels[i].add(splitPane, BorderLayout.CENTER);
-
-            this.roleTextFields[i] = new JTextField(40);
-            this.authorizationTextFields[i] = new JTextField(40);
-            this.roleCheckBoxes[i] = new JCheckBox("Enable Cookies");
-            this.authorizationCheckBoxes[i] = new JCheckBox("Enable Authorization Header");
-
-            JPanel rolePanel = new JPanel(new GridLayout(2, 1));
-
-            // Cookie Panel
-            JPanel cookiePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-            cookiePanel.add(new JLabel("Cookies:"));
-            this.roleTextFields[i].setPreferredSize(new Dimension(400, 30));
-            cookiePanel.add(this.roleTextFields[i]);
-            rolePanel.add(cookiePanel);
-
-            // Authorization Header Panel
-            JPanel authPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-            authPanel.add(new JLabel("Authorization Header:"));
-            this.authorizationTextFields[i].setPreferredSize(new Dimension(400, 30));
-            authPanel.add(this.authorizationTextFields[i]);
-            rolePanel.add(authPanel);
-
-            JPanel checkBoxPanel = new JPanel();
-            checkBoxPanel.setLayout(new GridLayout(3, 1));
-            this.monitorCheckBoxes[i] = new JCheckBox("Enable Monitoring");
-            checkBoxPanel.add(this.monitorCheckBoxes[i]);
-            checkBoxPanel.add(this.roleCheckBoxes[i]);
-            checkBoxPanel.add(this.authorizationCheckBoxes[i]);
-
-            JPanel topPanel = new JPanel();
-            topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS)); // Use BoxLayout for vertical stacking
-            topPanel.add(rolePanel);
-            topPanel.add(Box.createRigidArea(new Dimension(0, 10))); // Add vertical space
-            topPanel.add(checkBoxPanel);
-
-            this.requestPanels[i].add(topPanel, BorderLayout.NORTH);
-
-            this.tabbedPane.addTab("User " + (i + 1), this.requestPanels[i]);
+            // Add action listener to roleCheckBox
+            final int userIndex = i;
+            roleCheckBoxes[userIndex].addActionListener(e -> {
+                if (roleCheckBoxes[userIndex].isSelected()) {
+                    // Enable capturing requests for this user
+                    callbacks.registerHttpListener(new AutoRiseHttpListener(this, userIndex));
+                } else {
+                    // Disable capturing requests for this user
+                    callbacks.removeHttpListener(new AutoRiseHttpListener(this, userIndex));
+                }
+            });
         }
 
-        // Add unauthenticated tab
+        // Add unauthenticated user tab
         JPanel unauthenticatedPanel = new JPanel(new BorderLayout());
-        unauthenticatedPanel.add(new JLabel("Unauthenticated"), BorderLayout.NORTH);
-        JCheckBox enableCheckBox = new JCheckBox("Enable");
-        unauthenticatedPanel.add(enableCheckBox, BorderLayout.CENTER);
-        JTabbedPane unauthenticatedTabs = new JTabbedPane();
-        unauthenticatedTabs.addTab("Request", new JScrollPane(new JTextArea()));
-        unauthenticatedTabs.addTab("Response", new JScrollPane(new JTextArea()));
-        unauthenticatedPanel.add(unauthenticatedTabs, BorderLayout.SOUTH);
-        this.tabbedPane.addTab("Unauthenticated", unauthenticatedPanel);
+        unauthenticatedPanel.add(new JLabel("Unauthenticated User"), BorderLayout.NORTH);
+        tabbedPane.addTab("Unauthenticated", unauthenticatedPanel);
 
-        // Add tabs to main panel
-        this.mainPanel.add(this.tabbedPane, BorderLayout.CENTER);
+        // Add config tab
+        JPanel configPanel = new JPanel(new BorderLayout());
+        configPanel.add(new JLabel("Configuration"), BorderLayout.NORTH);
+        tabbedPane.addTab("Config", configPanel);
+
+        mainPanel.add(tabbedPane, BorderLayout.CENTER);
+        callbacks.customizeUiComponent(mainPanel);
+        callbacks.addSuiteTab(this);
     }
 
-    // Getter methods for private fields
-    public JTextField[] getRoleTextFields() {
-        return roleTextFields;
+    public void processHttpMessage(int toolFlag, boolean messageIsRequest, IHttpRequestResponse messageInfo, int userIndex) {
+        IRequestInfo requestInfo = helpers.analyzeRequest(messageInfo);
+        String method = requestInfo.getMethod();
+        String url = requestInfo.getUrl().toString();
+        
+        // Use a combination of method, URL, and possibly headers to track unique requests
+        String uniqueRequestKey = method + ":" + url;
+    
+        if (messageIsRequest) {
+            int id = requestCounter++;
+            logInfo("Processing request: ID=" + id + ", Method=" + method + ", URL=" + url);
+    
+            // Check if this request is a duplicate
+            boolean isDuplicate = requestMap.containsKey(uniqueRequestKey);
+            if (!isDuplicate) {
+                tableModels[userIndex].addRow(new Object[]{id, method, url, ""});
+                requestMap.put(uniqueRequestKey, messageInfo);
+                userRequestResponseMap.computeIfAbsent(userIndex, k -> new HashMap<>()).put(id, messageInfo);
+    
+                // Store the ID in the IHttpRequestResponse object
+                messageInfo.setComment(String.valueOf(id));
+            } else {
+                logInfo("Duplicate request detected: " + url);
+            }
+        } else {
+            byte[] response = messageInfo.getResponse();
+            if (response != null) {
+                short statusCode = helpers.analyzeResponse(response).getStatusCode();
+                logInfo("Processing response: Status Code=" + statusCode);
+    
+                // Retrieve the ID from the IHttpRequestResponse object
+                int id = Integer.parseInt(messageInfo.getComment());
+    
+                // Update the IHttpRequestResponse object with the response
+                messageInfo.setResponse(response);
+    
+                // Find the corresponding request and update the status code
+                for (int i = 0; i < tableModels[userIndex].getRowCount(); i++) {
+                    Integer requestId = (Integer) tableModels[userIndex].getValueAt(i, 0);
+                    if (requestId != null && requestId.equals(id)) {
+                        tableModels[userIndex].setValueAt(statusCode, i, 3);
+                        break;
+                    }
+                }
+    
+                // Update the userRequestResponseMap with the modified messageInfo
+                userRequestResponseMap.get(userIndex).put(id, messageInfo);
+            } else {
+                logInfo("Response is null for ID=" + messageInfo.getComment());
+            }
+        }
     }
 
-    public JTextField[] getAuthorizationTextFields() {
-        return authorizationTextFields;
-    }
-
-    public JCheckBox[] getRoleCheckBoxes() {
-        return roleCheckBoxes;
-    }
-
-    public JCheckBox[] getAuthorizationCheckBoxes() {
-        return authorizationCheckBoxes;
-    }
-
-    public JCheckBox[] getMonitorCheckBoxes() {
-        return monitorCheckBoxes;
-    }
-
-    public ITextEditor[] getRequestViewers() {
-        return requestViewers;
-    }
-
-    public ITextEditor[] getModifiedRequestViewers() {
-        return modifiedRequestViewers;
-    }
-
-    public ITextEditor[] getResponseViewers() {
-        return responseViewers;
-    }
-
-    public ITextEditor[] getModifiedResponseViewers() {
-        return modifiedResponseViewers;
-    }
-
-    public IBurpExtenderCallbacks getCallbacks() {
-        return callbacks;
-    }
-
-    public IExtensionHelpers getHelpers() {
-        return helpers;
-    }
-
-    public DefaultTableModel[] getTableModels() {
-        return tableModels;
-    }
-
-    public JTable[] getTables() {
-        return tables;
-    }
-
-    public JScrollPane[] getRequestScrollPanes() {
-        return requestScrollPanes;
-    }
-
-    public JPanel[] getRequestPanels() {
-        return requestPanels;
-    }
-
-    public Map<String, IHttpRequestResponse> getRequestMap() {
-        return requestMap;
-    }
-
-    public JPanel getMainPanel() {
-        return mainPanel;
-    }
-
-    public JTabbedPane getTabbedPane() {
-        return tabbedPane;
-    }
-
-    public DefaultListModel[] getRequestLists() {
-        return requestLists;
-    }
-
-    public JList[] getRequestJLists() {
-        return requestJLists;
-    }
-
-    public PrintWriter getStdout() {
-        return stdout;
-    }
-
-    public PrintWriter getStderr() {
-        return stderr;
+    @Override
+    public void valueChanged(ListSelectionEvent e) {
+        logInfo("valueChanged called");
+        if (!e.getValueIsAdjusting()) {
+            logInfo("Event is not adjusting");
+            try {
+                Object source = e.getSource();
+                JTable sourceTable = null;
+    
+                if (source instanceof JTable) {
+                    sourceTable = (JTable) source;
+                } else if (source instanceof DefaultListSelectionModel) {
+                    for (JTable table : tables) {
+                        if (table.getSelectionModel() == source) {
+                            sourceTable = table;
+                            break;
+                        }
+                    }
+                }
+    
+                if (sourceTable != null) {
+                    logInfo("Source table: " + sourceTable);
+                    int selectedRow = sourceTable.getSelectedRow();
+                    logInfo("Selected row: " + selectedRow);
+                    if (selectedRow >= 0) {
+                        boolean tableMatched = false;
+                        for (int i = 0; i < tables.length; i++) {
+                            if (tables[i] == sourceTable) {
+                                tableMatched = true;
+                                logInfo("Source table matched for user index: " + i);
+                                Object idObject = tableModels[i].getValueAt(selectedRow, 0);
+                                if (idObject != null) {
+                                    int id = (int) idObject;
+                                    logInfo("Selected ID: " + id);
+                                    IHttpRequestResponse messageInfo = userRequestResponseMap.get(i).get(id);
+                                    if (messageInfo != null) {
+                                        logInfo("Displaying request and response for ID=" + id);
+                                        byte[] request = messageInfo.getRequest();
+                                        byte[] response = messageInfo.getResponse();
+                                        if (request != null) {
+                                            logInfo("Request length: " + request.length);
+                                            requestViewers[i].setText(request);
+                                        } else {
+                                            logError("Request is null for ID=" + id);
+                                        }
+                                        if (response != null) {
+                                            logInfo("Response length: " + response.length);
+                                            responseViewers[i].setText(response);
+                                        } else {
+                                            logError("Response is null for ID=" + id);
+                                        }
+                                    } else {
+                                        logError("No message info found for ID=" + id);
+                                    }
+                                } else {
+                                    logError("ID object is null at selected row: " + selectedRow);
+                                }
+                            }
+                        }
+                        if (!tableMatched) {
+                            logError("No matching table found for the source table");
+                        }
+                    } else {
+                        logError("No row is selected");
+                    }
+                } else {
+                    if (source != null) {
+                        logError("Event source is not a JTable or associated with any JTable: " + source.getClass().getName());
+                    } else {
+                        logError("Event source is null");
+                    }
+                }
+            } catch (Exception ex) {
+                logError("Exception occurred in valueChanged: " + ex.getMessage());
+                logError("Exception stack trace: " + ex.toString());
+            }
+        }
     }
 
     @Override
@@ -303,6 +306,22 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab {
 
     @Override
     public Component getUiComponent() {
-        return this.mainPanel;
+        return mainPanel;
+    }
+
+    // Inner class for HTTP Listener
+    public class AutoRiseHttpListener implements IHttpListener {
+        private final AutoRiseToTheOccasion extender;
+        private final int userIndex;
+
+        public AutoRiseHttpListener(AutoRiseToTheOccasion extender, int userIndex) {
+            this.extender = extender;
+            this.userIndex = userIndex;
+        }
+
+        @Override
+        public void processHttpMessage(int toolFlag, boolean messageIsRequest, IHttpRequestResponse messageInfo) {
+            extender.processHttpMessage(toolFlag, messageIsRequest, messageInfo, userIndex);
+        }
     }
 }
