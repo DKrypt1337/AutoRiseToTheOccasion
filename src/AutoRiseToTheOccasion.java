@@ -106,7 +106,9 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         ModificationDetails modDetails = new ModificationDetails();
         highlightMap.put(Integer.valueOf(requestId), modDetails);
 
-        // Modify cookies if enabled
+        boolean modified = false;
+        
+        // Check if Cookie header exists and should be modified
         if (enableCookiesCheckBoxes[userIndex].isSelected() && !cookieInputBoxes[userIndex].getText().trim().isEmpty()) {
             int cookieHeaderIndex = -1;
             String cookieHeader = null;
@@ -119,6 +121,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                 }
             }
 
+            // Only modify if Cookie header exists
             if (cookieHeader != null) {
                 // Calculate the start position of the Cookie header in the full request
                 int headerStart = 0;
@@ -126,7 +129,6 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                     headerStart += headers.get(i).length() + 2; // +2 for \r\n
                 }
                 
-                // Track the position of the modified cookie header
                 modDetails.cookieHighlights.add(new int[]{headerStart, headerStart + cookieHeader.length()});
 
                 // Parse existing cookies into a LinkedHashMap to maintain order
@@ -148,26 +150,26 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                     for (String userCookie : userCookies) {
                         String[] parts = userCookie.split("=", 2);
                         if (parts.length == 2) {
-                            cookieMap.put(parts[0], parts[1]);
+                            // Only modify if cookie already exists
+                            if (cookieMap.containsKey(parts[0])) {
+                                cookieMap.put(parts[0], parts[1]);
+                                modified = true;
+                            }
                         }
                     }
                 }
 
-                // Build new cookie header
-                String newCookieHeader = "Cookie: " + cookieMap.entrySet().stream()
-                    .map(e -> e.getKey() + "=" + e.getValue())
-                    .collect(Collectors.joining("; "));
-
-                // Replace cookie header at the same position
-                if (cookieHeaderIndex != -1) {
+                // Only update if modifications were made
+                if (modified) {
+                    String newCookieHeader = "Cookie: " + cookieMap.entrySet().stream()
+                        .map(e -> e.getKey() + "=" + e.getValue())
+                        .collect(Collectors.joining("; "));
                     headers.set(cookieHeaderIndex, newCookieHeader);
-                } else {
-                    headers.add(newCookieHeader);
                 }
             }
         }
 
-        // Similar for Authorization header
+        // Check if Authorization header exists and should be modified
         if (enableAuthorizationCheckBoxes[userIndex].isSelected() && 
             !authInputBoxes[userIndex].getText().trim().isEmpty()) {
             int authHeaderIndex = -1;
@@ -182,15 +184,15 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                     break;
                 }
             }
-            String newAuthHeader = "Authorization: " + authInputBoxes[userIndex].getText().trim();
+            // Only modify if Authorization header exists
             if (authHeaderIndex != -1) {
+                String newAuthHeader = "Authorization: " + authInputBoxes[userIndex].getText().trim();
                 headers.set(authHeaderIndex, newAuthHeader);
-            } else {
-                headers.add(newAuthHeader);
+                modified = true;
             }
         }
 
-        return helpers.buildHttpMessage(headers, body.getBytes());
+        return modified ? helpers.buildHttpMessage(headers, body.getBytes()) : null;
     }
 
     private String generateRequestKey(IRequestInfo requestInfo, int userIndex) {
@@ -452,10 +454,6 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                     if (!csrfTestCheckBox.isSelected()) {
                         return;
                     }
-                    // Remove the CSRF token check here as it might be too restrictive
-                    // if (!hasCsrfTokens(messageInfo)) {
-                    //     return;
-                    // }
                 } else if (userIndex < 10 && !roleCheckBoxes[userIndex].isSelected()) {
                     // Skip if role is not enabled for regular user tabs
                     return;
