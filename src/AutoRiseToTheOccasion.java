@@ -449,9 +449,13 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                 
                 // For CSRF tab (userIndex == 10), check if CSRF testing is enabled
                 if (userIndex == 10) {
-                    if (!csrfTestCheckBox.isSelected() || !hasCsrfTokens(messageInfo)) {
+                    if (!csrfTestCheckBox.isSelected()) {
                         return;
                     }
+                    // Remove the CSRF token check here as it might be too restrictive
+                    // if (!hasCsrfTokens(messageInfo)) {
+                    //     return;
+                    // }
                 } else if (userIndex < 10 && !roleCheckBoxes[userIndex].isSelected()) {
                     // Skip if role is not enabled for regular user tabs
                     return;
@@ -464,13 +468,20 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                 IHttpRequestResponse modifiedMessage = null;
                 boolean modificationsAttempted = false;
 
-                // Only attempt modifications if cookies or auth are enabled
-                if (enableCookiesCheckBoxes[userIndex].isSelected() || 
+                // Handle CSRF modifications differently
+                if (userIndex == 10) {
+                    modifiedRequest = modifyCsrfToken(originalRequest);
+                    if (modifiedRequest != null) {
+                        modificationsAttempted = true;
+                        modifiedMessage = callbacks.makeHttpRequest(
+                            messageInfo.getHttpService(),
+                            modifiedRequest
+                        );
+                    }
+                } else if (enableCookiesCheckBoxes[userIndex].isSelected() || 
                     enableAuthorizationCheckBoxes[userIndex].isSelected()) {
-                    
+                    // Handle regular role-based modifications
                     modifiedRequest = modifyRequest(originalRequest, userIndex, String.valueOf(id));
-                    
-                    // Only make new request if modifications were actually made
                     if (!Arrays.equals(originalRequest, modifiedRequest)) {
                         modificationsAttempted = true;
                         modifiedMessage = callbacks.makeHttpRequest(
@@ -495,25 +506,35 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                     bypassStatus = "No modifications attempted";
                 } else if (modifiedMessage != null && 
                          helpers.analyzeResponse(modifiedMessage.getResponse()).getStatusCode() == 200) {
-                    bypassStatus = "Yes - Role bypass successful";
+                    bypassStatus = userIndex == 10 ? "Yes - CSRF bypass successful" : "Yes - Role bypass successful";
                 } else {
-                    bypassStatus = "No - Modifications failed";
+                    bypassStatus = userIndex == 10 ? "No - CSRF bypass failed" : "No - Modifications failed";
                 }
 
                 final String finalBypassStatus = bypassStatus;
                 final int finalId = id;
                 final IHttpRequestResponse finalModifiedMessage = modifiedMessage != null ? modifiedMessage : messageInfo;
-                final boolean finalModificationsAttempted = modificationsAttempted;
 
                 SwingUtilities.invokeLater(() -> {
                     try {
-                        tableModels[userIndex].addRow(new Object[]{
-                            finalId,
-                            requestInfo.getMethod(),
-                            requestInfo.getUrl().toString(),
-                            helpers.analyzeResponse(finalModifiedMessage.getResponse()).getStatusCode(),
-                            finalBypassStatus
-                        });
+                        if (userIndex == 10) {
+                            // For CSRF tab, include token location
+                            tableModels[userIndex].addRow(new Object[]{
+                                finalId,
+                                requestInfo.getMethod(),
+                                requestInfo.getUrl().toString(),
+                                getCsrfTokenLocation(messageInfo),
+                                finalBypassStatus
+                            });
+                        } else {
+                            tableModels[userIndex].addRow(new Object[]{
+                                finalId,
+                                requestInfo.getMethod(),
+                                requestInfo.getUrl().toString(),
+                                helpers.analyzeResponse(finalModifiedMessage.getResponse()).getStatusCode(),
+                                finalBypassStatus
+                            });
+                        }
                     } catch (Exception e) {
                         logError("Error adding row to table: " + e.getMessage());
                         e.printStackTrace(new PrintStream(callbacks.getStderr()));
