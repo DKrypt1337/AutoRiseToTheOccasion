@@ -108,7 +108,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
 
         boolean modified = false;
         
-        // Check if Cookie header exists and should be modified
+        // Check and modify Cookie header if enabled
         if (enableCookiesCheckBoxes[userIndex].isSelected() && !cookieInputBoxes[userIndex].getText().trim().isEmpty()) {
             int cookieHeaderIndex = -1;
             String cookieHeader = null;
@@ -169,7 +169,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
             }
         }
 
-        // Check if Authorization header exists and should be modified
+        // Check and modify Authorization header if enabled
         if (enableAuthorizationCheckBoxes[userIndex].isSelected() && 
             !authInputBoxes[userIndex].getText().trim().isEmpty()) {
             int authHeaderIndex = -1;
@@ -258,6 +258,9 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                             } else if (value != null && value.toString().startsWith("No")) {
                                 c.setBackground(new Color(255, 180, 180)); // Darker red
                                 c.setForeground(new Color(139, 0, 0));     // Dark red text
+                            } else if (value != null && value.toString().equals("No modifications attempted")) {
+                                c.setBackground(new Color(69, 69, 69));    // Dark grey
+                                c.setForeground(Color.WHITE);              // White text
                             } else {
                                 c.setBackground(table.getBackground());
                                 c.setForeground(table.getForeground());
@@ -357,6 +360,38 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         tables[csrfTabIndex] = new JTable(tableModels[csrfTabIndex]);
         adjustColumnWidths(tables[csrfTabIndex]);
         tables[csrfTabIndex].getSelectionModel().addListSelectionListener(this);
+
+        // Add custom cell renderer for the Bypassed column
+        tables[csrfTabIndex].getColumnModel().getColumn(4).setCellRenderer(new DefaultTableCellRenderer() {
+            @Override
+            public Component getTableCellRendererComponent(JTable table, Object value,
+                    boolean isSelected, boolean hasFocus, int row, int column) {
+                Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+                
+                if (value != null) {
+                    String status = value.toString();
+                    if (status.contains("successful")) {
+                        c.setBackground(new Color(144, 238, 144)); // Light green
+                        c.setForeground(new Color(0, 100, 0));     // Dark green text
+                    } else if (status.contains("failed")) {
+                        c.setBackground(new Color(255, 180, 180)); // Light red
+                        c.setForeground(new Color(139, 0, 0));     // Dark red text
+                    } else if (status.equals("No modifications attempted")) {
+                        c.setBackground(new Color(69, 69, 69));    // Dark grey
+                        c.setForeground(Color.WHITE);              // White text
+                    } else {
+                        c.setBackground(table.getBackground());
+                        c.setForeground(table.getForeground());
+                    }
+                }
+                
+                if (isSelected) {
+                    c.setForeground(table.getSelectionForeground());
+                }
+                
+                return c;
+            }
+        });
 
         requestViewers[csrfTabIndex] = callbacks.createTextEditor();
         modifiedRequestViewers[csrfTabIndex] = callbacks.createTextEditor();
@@ -468,13 +503,85 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
 
                 // Handle CSRF modifications differently
                 if (userIndex == 10) {
-                    modifiedRequest = modifyCsrfToken(originalRequest);
-                    if (modifiedRequest != null) {
+                    Object modifiedRequests = modifyCsrfToken(originalRequest);
+                    if (modifiedRequests != null) {
                         modificationsAttempted = true;
-                        modifiedMessage = callbacks.makeHttpRequest(
-                            messageInfo.getHttpService(),
-                            modifiedRequest
-                        );
+                        
+                        if (modifiedRequests instanceof byte[][]) {
+                            // We have both cookie and header modifications
+                            byte[][] requests = (byte[][])modifiedRequests;
+                            
+                            // First request: Cookie modified
+                            IHttpRequestResponse cookieModifiedMessage = callbacks.makeHttpRequest(
+                                messageInfo.getHttpService(),
+                                requests[0]
+                            );
+                            
+                            // Second request: Header modified
+                            IHttpRequestResponse headerModifiedMessage = callbacks.makeHttpRequest(
+                                messageInfo.getHttpService(),
+                                requests[1]
+                            );
+                            
+                            // Store both modified requests and responses
+                            RequestResponsePair pair = new RequestResponsePair();
+                            pair.id = id;
+                            pair.originalRequest = originalRequest;
+                            pair.originalResponse = originalResponse;
+                            pair.modifiedRequest = requests[0]; // Store cookie-modified request
+                            pair.modifiedResponse = cookieModifiedMessage.getResponse();
+                            requestResponseMap.put(id, pair);
+                            
+                            // Create new entry for header-modified request
+                            int headerId = requestCounter++;
+                            RequestResponsePair headerPair = new RequestResponsePair();
+                            headerPair.id = headerId;
+                            headerPair.originalRequest = originalRequest;
+                            headerPair.originalResponse = originalResponse;
+                            headerPair.modifiedRequest = requests[1];
+                            headerPair.modifiedResponse = headerModifiedMessage.getResponse();
+                            requestResponseMap.put(headerId, headerPair);
+                            
+                            // Add both entries to the table
+                            final int finalId = id;
+                            final int finalHeaderId = headerId;
+                            SwingUtilities.invokeLater(() -> {
+                                try {
+                                    // Add cookie-modified request entry
+                                    tableModels[userIndex].addRow(new Object[]{
+                                        finalId,
+                                        requestInfo.getMethod(),
+                                        requestInfo.getUrl().toString() + " (Cookie Modified)",
+                                        getCsrfTokenLocation(messageInfo),
+                                        helpers.analyzeResponse(cookieModifiedMessage.getResponse()).getStatusCode() == 200 
+                                            ? "Yes - CSRF bypass successful (Cookie)" 
+                                            : "No - CSRF bypass failed (Cookie)"
+                                    });
+                                    
+                                    // Add header-modified request entry
+                                    tableModels[userIndex].addRow(new Object[]{
+                                        finalHeaderId,
+                                        requestInfo.getMethod(),
+                                        requestInfo.getUrl().toString() + " (Header Modified)",
+                                        getCsrfTokenLocation(messageInfo),
+                                        helpers.analyzeResponse(headerModifiedMessage.getResponse()).getStatusCode() == 200 
+                                            ? "Yes - CSRF bypass successful (Header)" 
+                                            : "No - CSRF bypass failed (Header)"
+                                    });
+                                } catch (Exception e) {
+                                    logError("Error adding rows to table: " + e.getMessage());
+                                    e.printStackTrace(new PrintStream(callbacks.getStderr()));
+                                }
+                            });
+                            return;
+                        } else {
+                            // Single modification case
+                            modifiedRequest = (byte[])modifiedRequests;
+                            modifiedMessage = callbacks.makeHttpRequest(
+                                messageInfo.getHttpService(),
+                                modifiedRequest
+                            );
+                        }
                     }
                 } else if (enableCookiesCheckBoxes[userIndex].isSelected() || 
                     enableAuthorizationCheckBoxes[userIndex].isSelected()) {
@@ -489,7 +596,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                     }
                 }
 
-                // Store in request response map
+                // Store in request response map (for single modification cases)
                 RequestResponsePair pair = new RequestResponsePair();
                 pair.id = id;
                 pair.originalRequest = originalRequest;
@@ -516,7 +623,6 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                 SwingUtilities.invokeLater(() -> {
                     try {
                         if (userIndex == 10) {
-                            // For CSRF tab, include token location
                             tableModels[userIndex].addRow(new Object[]{
                                 finalId,
                                 requestInfo.getMethod(),
@@ -628,92 +734,142 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         callbacks.printError(message);
     }
 
-    private byte[] modifyCsrfToken(byte[] request) {
+    private Object modifyCsrfToken(byte[] request) {
         IRequestInfo requestInfo = helpers.analyzeRequest(request);
         List<String> headers = requestInfo.getHeaders();
         String body = new String(request).substring(requestInfo.getBodyOffset());
         
-        boolean modified = false;
         List<String> modifiedHeaders = new ArrayList<>(headers);
         
-        // Check headers for CSRF tokens
+        // Specific CSRF token patterns
+        List<String> csrfPatterns = Arrays.asList(
+            "x-csrf-token",
+            "x-xsrf-token",
+            "csrf-token",
+            "xsrf-token",
+            "x-csrf",
+            "x-xsrf",
+            "_csrf",
+            "_xsrf",
+            "anti-forgery-token",
+            "x-anti-forgery-token",
+            "__requestverificationtoken",
+            "authenticity_token",
+            "csrf_nonce",
+            "csrf-key",
+            "x-csrf-header",
+            "x-csrf-protection",
+            "csrftoken",
+            "csrf_token",
+            "xsrftoken",
+            "xsrf_token"
+        );
+        
+        // Find CSRF tokens in headers and cookies
+        int csrfHeaderIndex = -1;
+        int csrfCookieIndex = -1;
+        String csrfCookieName = null;
+        
+        // Check headers
         for (int i = 0; i < modifiedHeaders.size(); i++) {
-            String header = modifiedHeaders.get(i).toLowerCase();
-            if (header.contains("csrf") || header.contains("xsrf")) {
-                String[] parts = modifiedHeaders.get(i).split(": ", 2);
-                if (parts.length == 2) {
-                    // Try different CSRF bypass techniques
-                    String modifiedValue = parts[1] + "_bypass"; // Simple modification
-                    modifiedHeaders.set(i, parts[0] + ": " + modifiedValue);
-                    modified = true;
+            String headerLower = modifiedHeaders.get(i).toLowerCase();
+            if (csrfPatterns.stream().anyMatch(pattern -> headerLower.contains(pattern))) {
+                csrfHeaderIndex = i;
+            }
+            if (headerLower.startsWith("cookie:")) {
+                String[] cookies = modifiedHeaders.get(i).substring(8).split("; ");
+                for (String cookie : cookies) {
+                    if (csrfPatterns.stream().anyMatch(pattern -> cookie.toLowerCase().contains(pattern))) {
+                        csrfCookieIndex = i;
+                        csrfCookieName = cookie.split("=")[0];
+                        break;
+                    }
                 }
             }
         }
         
-        // Check and modify CSRF tokens in cookies
-        for (int i = 0; i < modifiedHeaders.size(); i++) {
-            String header = modifiedHeaders.get(i);
-            if (header.toLowerCase().startsWith("cookie:")) {
-                String[] cookies = header.substring(8).split("; ");
-                List<String> modifiedCookies = new ArrayList<>();
+        // If both header and cookie CSRF tokens exist, create two different requests
+        if (csrfHeaderIndex != -1 && csrfCookieIndex != -1) {
+            // First request: Modify cookie, keep header original
+            List<String> cookieModifiedHeaders = new ArrayList<>(headers);
+            String cookieHeader = cookieModifiedHeaders.get(csrfCookieIndex);
+            String[] cookies = cookieHeader.substring(8).split("; ");
+            List<String> modifiedCookies = new ArrayList<>();
+            
+            for (String cookie : cookies) {
+                if (cookie.startsWith(csrfCookieName)) {
+                    String[] parts = cookie.split("=", 2);
+                    if (parts.length == 2) {
+                        modifiedCookies.add(parts[0] + "=" + parts[1] + "_bypass");
+                    }
+                } else {
+                    modifiedCookies.add(cookie);
+                }
+            }
+            cookieModifiedHeaders.set(csrfCookieIndex, "Cookie: " + String.join("; ", modifiedCookies));
+            byte[] cookieModifiedRequest = helpers.buildHttpMessage(cookieModifiedHeaders, body.getBytes());
+            
+            // Second request: Modify header, keep cookie original
+            List<String> headerModifiedHeaders = new ArrayList<>(headers);
+            String[] headerParts = headerModifiedHeaders.get(csrfHeaderIndex).split(": ", 2);
+            if (headerParts.length == 2) {
+                headerModifiedHeaders.set(csrfHeaderIndex, headerParts[0] + ": " + headerParts[1] + "_bypass");
+            }
+            byte[] headerModifiedRequest = helpers.buildHttpMessage(headerModifiedHeaders, body.getBytes());
+            
+            // Return both modified requests as an array
+            return new byte[][] { cookieModifiedRequest, headerModifiedRequest };
+        }
+        
+        // If only one type of token exists, modify it
+        boolean modified = false;
+        
+        // Modify header if it exists
+        if (csrfHeaderIndex != -1) {
+            String[] parts = modifiedHeaders.get(csrfHeaderIndex).split(": ", 2);
+            if (parts.length == 2) {
+                modifiedHeaders.set(csrfHeaderIndex, parts[0] + ": " + parts[1] + "_bypass");
+                modified = true;
+            }
+        }
+        
+        // Modify cookie if it exists
+        if (csrfCookieIndex != -1) {
+            String cookieHeader = modifiedHeaders.get(csrfCookieIndex);
+            String[] cookies = cookieHeader.substring(8).split("; ");
+            List<String> modifiedCookies = new ArrayList<>();
+            
+            for (String cookie : cookies) {
+                boolean isCsrfCookie = csrfPatterns.stream()
+                    .anyMatch(pattern -> cookie.toLowerCase().contains(pattern));
                 
-                for (String cookie : cookies) {
-                    if (cookie.toLowerCase().contains("csrf") || cookie.toLowerCase().contains("xsrf")) {
-                        String[] parts = cookie.split("=", 2);
-                        if (parts.length == 2) {
-                            modifiedCookies.add(parts[0] + "=" + parts[1] + "_bypass");
-                            modified = true;
-                        } else {
-                            modifiedCookies.add(cookie);
-                        }
+                if (isCsrfCookie) {
+                    String[] parts = cookie.split("=", 2);
+                    if (parts.length == 2) {
+                        modifiedCookies.add(parts[0] + "=" + parts[1] + "_bypass");
+                        modified = true;
                     } else {
                         modifiedCookies.add(cookie);
                     }
+                } else {
+                    modifiedCookies.add(cookie);
                 }
-                
-                modifiedHeaders.set(i, "Cookie: " + String.join("; ", modifiedCookies));
             }
+            
+            modifiedHeaders.set(csrfCookieIndex, "Cookie: " + String.join("; ", modifiedCookies));
         }
         
         // Check body for CSRF tokens
         String modifiedBody = body;
-        if (body.contains("csrf") || body.contains("xsrf")) {
-            // More sophisticated token detection and modification
-            modifiedBody = body.replaceAll("(csrf[^=]+=)([^&\n]+)", "$1$2_bypass")
-                             .replaceAll("(xsrf[^=]+=)([^&\n]+)", "$1$2_bypass");
-            modified = true;
+        for (String pattern : csrfPatterns) {
+            if (body.toLowerCase().contains(pattern)) {
+                String regex = "(" + pattern + "[^=]+=)([^&\\n\"]+)";
+                modifiedBody = modifiedBody.replaceAll(regex, "$1$2_bypass");
+                modified = true;
+            }
         }
         
         return modified ? helpers.buildHttpMessage(modifiedHeaders, modifiedBody.getBytes()) : null;
-    }
-
-    private boolean hasCsrfTokens(IHttpRequestResponse messageInfo) {
-        IRequestInfo requestInfo = helpers.analyzeRequest(messageInfo);
-        List<String> headers = requestInfo.getHeaders();
-        String body = new String(messageInfo.getRequest()).substring(requestInfo.getBodyOffset());
-
-        // Check common CSRF token patterns in headers
-        boolean hasCSRFHeader = headers.stream().anyMatch(h -> 
-            h.toLowerCase().contains("csrf") || 
-            h.toLowerCase().contains("xsrf") || 
-            h.toLowerCase().contains("anti-forgery")
-        );
-
-        // Check for CSRF tokens in cookies
-        boolean hasCSRFCookie = headers.stream()
-            .filter(h -> h.toLowerCase().startsWith("cookie:"))
-            .anyMatch(c -> 
-                c.toLowerCase().contains("csrf") || 
-                c.toLowerCase().contains("xsrf") || 
-                c.toLowerCase().contains("anti-forgery")
-            );
-
-        // Check for common CSRF token patterns in body
-        boolean hasCSRFBody = body.toLowerCase().contains("csrf") || 
-                            body.toLowerCase().contains("xsrf") || 
-                            body.toLowerCase().contains("anti-forgery");
-
-        return hasCSRFHeader || hasCSRFCookie || hasCSRFBody;
     }
 
     private String getCsrfTokenLocation(IHttpRequestResponse messageInfo) {
