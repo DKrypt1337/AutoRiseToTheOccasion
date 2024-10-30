@@ -4,11 +4,12 @@ import java.awt.Dimension;
 import java.awt.GridLayout;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
-import javax.swing.DefaultListSelectionModel;
 import javax.swing.JCheckBox;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -17,7 +18,6 @@ import javax.swing.JTabbedPane;
 import javax.swing.JTable;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
-import javax.swing.SwingWorker;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
 import javax.swing.table.DefaultTableModel;
@@ -48,84 +48,11 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
     private JCheckBox[] enableAuthorizationCheckBoxes;
     private JTextField[] cookieInputBoxes;
     private JTextField[] authInputBoxes;
-    private Map<String, IHttpRequestResponse> requestMap = new HashMap<>();
-    private Map<Integer, Map<Integer, IHttpRequestResponse>> userRequestResponseMap = new HashMap<>();
     private int requestCounter = 0;
-
-    @Override
-    public void registerExtenderCallbacks(IBurpExtenderCallbacks callbacks) {
-        this.callbacks = callbacks;
-        this.helpers = callbacks.getHelpers();
-        callbacks.setExtensionName("AutoRiseToTheOccasion");
-
-        SwingUtilities.invokeLater(() -> {
-            mainPanel = new JPanel(new BorderLayout());
-            tabbedPane = new JTabbedPane();
-            int userCount = 3; // Example user count
-            tables = new JTable[userCount];
-            tableModels = new DefaultTableModel[userCount];
-            requestViewers = new ITextEditor[userCount];
-            modifiedRequestViewers = new ITextEditor[userCount];
-            responseViewers = new ITextEditor[userCount];
-            modifiedResponseViewers = new ITextEditor[userCount];
-            roleCheckBoxes = new JCheckBox[userCount];
-            enableCookiesCheckBoxes = new JCheckBox[userCount];
-            enableAuthorizationCheckBoxes = new JCheckBox[userCount];
-            cookieInputBoxes = new JTextField[userCount];
-            authInputBoxes = new JTextField[userCount];
-
-            for (int i = 0; i < userCount; i++) {
-                JPanel userPanel = new JPanel(new BorderLayout());
-                tableModels[i] = new DefaultTableModel(new Object[]{"ID", "Method", "URL", "Status", "Bypassed"}, 0);
-                tables[i] = new JTable(tableModels[i]);
-                adjustColumnWidths(tables[i]);
-                tables[i].getSelectionModel().addListSelectionListener(this);
-
-                requestViewers[i] = callbacks.createTextEditor();
-                modifiedRequestViewers[i] = callbacks.createTextEditor();
-                responseViewers[i] = callbacks.createTextEditor();
-                modifiedResponseViewers[i] = callbacks.createTextEditor();
-
-                roleCheckBoxes[i] = new JCheckBox("Enable Role " + (i + 1));
-                enableCookiesCheckBoxes[i] = new JCheckBox("Enable Cookies");
-                enableAuthorizationCheckBoxes[i] = new JCheckBox("Enable Authorization");
-                cookieInputBoxes[i] = new JTextField(20);
-                authInputBoxes[i] = new JTextField(20);
-
-                JPanel checkBoxPanel = new JPanel(new GridLayout(1, 5));
-                checkBoxPanel.add(roleCheckBoxes[i]);
-                checkBoxPanel.add(enableCookiesCheckBoxes[i]);
-                checkBoxPanel.add(cookieInputBoxes[i]);
-                checkBoxPanel.add(enableAuthorizationCheckBoxes[i]);
-                checkBoxPanel.add(authInputBoxes[i]);
-
-                JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(tables[i]), new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, new JScrollPane(requestViewers[i].getComponent()), new JScrollPane(responseViewers[i].getComponent())));
-                userPanel.add(checkBoxPanel, BorderLayout.NORTH);
-                userPanel.add(splitPane, BorderLayout.CENTER);
-
-                JTabbedPane requestResponseTabbedPane = new JTabbedPane();
-                JPanel originalPanel = new JPanel(new GridLayout(2, 1));
-                originalPanel.add(new JScrollPane(requestViewers[i].getComponent()));
-                originalPanel.add(new JScrollPane(responseViewers[i].getComponent()));
-                requestResponseTabbedPane.addTab("Original", originalPanel);
-
-                JPanel modifiedPanel = new JPanel(new GridLayout(2, 1));
-                modifiedPanel.add(new JScrollPane(modifiedRequestViewers[i].getComponent()));
-                modifiedPanel.add(new JScrollPane(modifiedResponseViewers[i].getComponent()));
-                requestResponseTabbedPane.addTab("Modified", modifiedPanel);
-
-                userPanel.add(requestResponseTabbedPane, BorderLayout.SOUTH);
-
-                tabbedPane.addTab("User " + (i + 1), userPanel);
-
-                callbacks.registerHttpListener(new AutoRiseHttpListener(this, i));
-            }
-
-            mainPanel.add(tabbedPane, BorderLayout.CENTER);
-            callbacks.customizeUiComponent(mainPanel);
-            callbacks.addSuiteTab(this);
-        });
-    }
+    private final Map<String, IHttpRequestResponse> requestMap = new HashMap<>();
+    private final Map<Integer, Map<Integer, IHttpRequestResponse>> userRequestResponseMap = new HashMap<>();
+    private final Set<String> processedRequestKeys = new HashSet<>();
+    private final Object lock = new Object();
 
     private void adjustColumnWidths(JTable table) {
         TableColumnModel columnModel = table.getColumnModel();
@@ -182,166 +109,175 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         return helpers.buildHttpMessage(headers, body.getBytes());
     }
 
-    public void processHttpMessage(int toolFlag, boolean messageIsRequest, IHttpRequestResponse messageInfo, int userIndex) {
-        IRequestInfo requestInfo = helpers.analyzeRequest(messageInfo);
+    private String generateRequestKey(IRequestInfo requestInfo) {
         String method = requestInfo.getMethod();
         String url = requestInfo.getUrl().toString();
-        
-        // Use a combination of method, URL, and possibly headers to track unique requests
-        String uniqueRequestKey = method + ":" + url;
+        // Include additional headers or parameters if necessary
+        return method + ":" + url;
+    }
 
-        // Check if the "Enable Role" checkbox is checked
-        if (roleCheckBoxes[userIndex].isSelected()) {
-            if (messageIsRequest) {
-                int id = requestCounter++;
-                logInfo("Processing request: ID=" + id + ", Method=" + method + ", URL=" + url);
+    @Override
+    public void registerExtenderCallbacks(IBurpExtenderCallbacks callbacks) {
+        this.callbacks = callbacks;
+        this.helpers = callbacks.getHelpers();
+        callbacks.setExtensionName("AutoRiseToTheOccasion");
 
-                // Check if this request is a duplicate
-                boolean isDuplicate = requestMap.containsKey(uniqueRequestKey);
-                if (!isDuplicate) {
-                    tableModels[userIndex].addRow(new Object[]{id, method, url, "", "Original Request"});
-                    requestMap.put(uniqueRequestKey, messageInfo);
-                    userRequestResponseMap.computeIfAbsent(userIndex, k -> new HashMap<>()).put(id, messageInfo);
+        SwingUtilities.invokeLater(() -> {
+            mainPanel = new JPanel(new BorderLayout());
+            tabbedPane = new JTabbedPane();
+            int userCount = 10; // User count
+            tables = new JTable[userCount];
+            tableModels = new DefaultTableModel[userCount];
+            requestViewers = new ITextEditor[userCount];
+            modifiedRequestViewers = new ITextEditor[userCount];
+            responseViewers = new ITextEditor[userCount];
+            modifiedResponseViewers = new ITextEditor[userCount];
+            roleCheckBoxes = new JCheckBox[userCount];
+            enableCookiesCheckBoxes = new JCheckBox[userCount];
+            enableAuthorizationCheckBoxes = new JCheckBox[userCount];
+            cookieInputBoxes = new JTextField[userCount];
+            authInputBoxes = new JTextField[userCount];
 
-                    // Store the ID in the IHttpRequestResponse object
-                    messageInfo.setComment(String.valueOf(id));
-                } else {
-                    logInfo("Duplicate request detected: " + url);
-                }
+            for (int i = 0; i < userCount; i++) {
+                JPanel userPanel = new JPanel(new BorderLayout());
+                tableModels[i] = new DefaultTableModel(new Object[]{"ID", "Method", "URL", "Status", "Bypassed"}, 0);
+                tables[i] = new JTable(tableModels[i]);
+                adjustColumnWidths(tables[i]);
+                tables[i].getSelectionModel().addListSelectionListener(this);
 
-                // Send duplicate request with modified values if checkboxes are enabled
-                if (enableCookiesCheckBoxes[userIndex].isSelected() || enableAuthorizationCheckBoxes[userIndex].isSelected()) {
-                    byte[] modifiedRequest = modifyRequest(messageInfo.getRequest(), userIndex);
-                    IHttpRequestResponse modifiedMessageInfo = callbacks.makeHttpRequest(messageInfo.getHttpService(), modifiedRequest);
-                    int modifiedId = requestCounter++;
-                    tableModels[userIndex].addRow(new Object[]{modifiedId, method, url, "", "Modified Request"});
-                    userRequestResponseMap.computeIfAbsent(userIndex, k -> new HashMap<>()).put(modifiedId, modifiedMessageInfo);
+                requestViewers[i] = callbacks.createTextEditor();
+                modifiedRequestViewers[i] = callbacks.createTextEditor();
+                responseViewers[i] = callbacks.createTextEditor();
+                modifiedResponseViewers[i] = callbacks.createTextEditor();
 
-                    // Process the modified response
-                    new SwingWorker<Void, Void>() {
-                        @Override
-                        protected Void doInBackground() throws Exception {
-                            byte[] response = modifiedMessageInfo.getResponse();
-                            if (response != null) {
-                                short statusCode = helpers.analyzeResponse(response).getStatusCode();
-                                logInfo("Processing modified response: Status Code=" + statusCode);
+                roleCheckBoxes[i] = new JCheckBox("Enable Role " + (i + 1));
+                enableCookiesCheckBoxes[i] = new JCheckBox("Enable Cookies");
+                enableAuthorizationCheckBoxes[i] = new JCheckBox("Enable Authorization");
+                cookieInputBoxes[i] = new JTextField(20);
+                authInputBoxes[i] = new JTextField(20);
 
-                                // Update the IHttpRequestResponse object with the response
-                                modifiedMessageInfo.setResponse(response);
+                JPanel checkBoxPanel = new JPanel(new GridLayout(1, 5));
+                checkBoxPanel.add(roleCheckBoxes[i]);
+                checkBoxPanel.add(enableCookiesCheckBoxes[i]);
+                checkBoxPanel.add(cookieInputBoxes[i]);
+                checkBoxPanel.add(enableAuthorizationCheckBoxes[i]);
+                checkBoxPanel.add(authInputBoxes[i]);
 
-                                // Find the corresponding request and update the status code and bypassed column
-                                for (int i = 0; i < tableModels[userIndex].getRowCount(); i++) {
-                                    Integer requestId = (Integer) tableModels[userIndex].getValueAt(i, 0);
-                                    if (requestId != null && requestId.equals(modifiedId)) {
-                                        tableModels[userIndex].setValueAt(statusCode, i, 3);
+                JSplitPane requestResponseSplitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(requestViewers[i].getComponent()), new JScrollPane(responseViewers[i].getComponent()));
+                requestResponseSplitPane.setResizeWeight(0.5);
+                requestResponseSplitPane.setDividerLocation(0.5);
 
-                                        // Check if the request is bypassed
-                                        if (enableCookiesCheckBoxes[userIndex].isSelected() || enableAuthorizationCheckBoxes[userIndex].isSelected()) {
-                                            boolean isBypassed = statusCode >= 200 && statusCode < 300;
-                                            String bypassedValue = isBypassed ? "✔" : "✘";
-                                            tableModels[userIndex].setValueAt(bypassedValue, i, 4);
-                                        } else {
-                                            tableModels[userIndex].setValueAt("Not checked", i, 4);
-                                        }
+                JSplitPane mainSplitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(tables[i]), requestResponseSplitPane);
+                mainSplitPane.setResizeWeight(0.33);
+                mainSplitPane.setDividerLocation(0.33);
 
-                                        break;
-                                    }
-                                }
+                userPanel.add(checkBoxPanel, BorderLayout.NORTH);
+                userPanel.add(mainSplitPane, BorderLayout.CENTER);
 
-                                // Update the userRequestResponseMap with the modified messageInfo
-                                userRequestResponseMap.get(userIndex).put(modifiedId, modifiedMessageInfo);
-                            } else {
-                                logInfo("Response is null for ID=" + modifiedMessageInfo.getComment());
-                            }
-                            return null;
-                        }
+                tabbedPane.addTab("User " + (i + 1), userPanel);
 
-                        @Override
-                        protected void done() {
-                            // Any post-processing can be done here if needed
-                            // Ensure the table is updated on the EDT
-                            SwingUtilities.invokeLater(() -> tables[userIndex].repaint());
-                        }
-                    }.execute();
+                callbacks.registerHttpListener(new AutoRiseHttpListener(this, i));
+            }
+
+            adjustRequestResponseBoxHeight();
+            mainPanel.add(tabbedPane, BorderLayout.CENTER);
+            callbacks.customizeUiComponent(mainPanel);
+            callbacks.addSuiteTab(this);
+        });
+    }
+
+    public void processHttpMessage(int toolFlag, boolean messageIsRequest, IHttpRequestResponse messageInfo, int userIndex) {
+        if (!messageIsRequest) {
+            IRequestInfo requestInfo = helpers.analyzeRequest(messageInfo);
+            String requestKey = generateRequestKey(requestInfo);
+    
+            synchronized (lock) {
+                if (!processedRequestKeys.contains(requestKey)) {
+                    processedRequestKeys.add(requestKey);
+                    int id = requestCounter++;
+                    logInfo("Processing response for request: " + requestKey + " with ID=" + id);
+    
+                    byte[] response = messageInfo.getResponse();
+                    if (response != null) {
+                        short statusCode = helpers.analyzeResponse(response).getStatusCode();
+                        logInfo("Processing response with status code: " + statusCode);
+    
+                        // Store the request-response
+                        requestMap.put(requestKey, messageInfo);
+                        userRequestResponseMap
+                            .computeIfAbsent(userIndex, k -> new HashMap<>())
+                            .put(id, messageInfo);
+    
+                        // Add to the table
+                        tableModels[userIndex].addRow(new Object[]{
+                            id,
+                            requestInfo.getMethod(),
+                            requestInfo.getUrl().toString(),
+                            statusCode,
+                            ""
+                        });
+                        logInfo("Response added to table with ID=" + id);
+                    } else {
+                        logError("Response is null for request key: " + requestKey);
+                    }
                 }
             }
         }
     }
 
     @Override
-    public void valueChanged(ListSelectionEvent e) {
-        logInfo("valueChanged called");
-        if (!e.getValueIsAdjusting()) {
-            logInfo("Event is not adjusting");
-            try {
-                Object source = e.getSource();
-                JTable sourceTable = null;
-
-                if (source instanceof JTable) {
-                    sourceTable = (JTable) source;
-                } else if (source instanceof DefaultListSelectionModel) {
-                    for (JTable table : tables) {
-                        if (table.getSelectionModel() == source) {
-                            sourceTable = table;
-                            break;
-                        }
-                    }
-                }
-
-                if (sourceTable != null) {
-                    logInfo("Source table: " + sourceTable);
-                    int selectedRow = sourceTable.getSelectedRow();
-                    logInfo("Selected row: " + selectedRow);
+public void valueChanged(ListSelectionEvent e) {
+    if (!e.getValueIsAdjusting()) {
+        try {
+            for (int i = 0; i < tables.length; i++) {
+                JTable table = tables[i];
+                if (e.getSource() == table.getSelectionModel()) {
+                    int selectedRow = table.getSelectedRow();
+                    logInfo("Row selected in table for user index " + i + ": " + selectedRow);
                     if (selectedRow >= 0) {
-                        boolean tableMatched = false;
-                        for (int i = 0; i < tables.length; i++) {
-                            if (tables[i] == sourceTable) {
-                                tableMatched = true;
-                                logInfo("Source table matched for user index: " + i);
-                                Object idObject = tableModels[i].getValueAt(selectedRow, 0);
-                                if (idObject != null) {
-                                    int id = (int) idObject;
-                                    logInfo("Selected ID: " + id);
-                                    IHttpRequestResponse messageInfo = userRequestResponseMap.get(i).get(id);
-                                    if (messageInfo != null) {
-                                        logInfo("Displaying request and response for ID=" + id);
-                                        byte[] request = messageInfo.getRequest();
-                                        byte[] response = messageInfo.getResponse();
-                                        if (request != null) {
-                                            logInfo("Request length: " + request.length);
-                                            requestViewers[i].setText(request);
-                                        } else {
-                                            logError("Request is null for ID=" + id);
-                                        }
-                                        if (response != null) {
-                                            logInfo("Response length: " + response.length);
-                                            responseViewers[i].setText(response);
-                                        } else {
-                                            logError("Response is null for ID=" + id);
-                                        }
+                        Object idObject = tableModels[i].getValueAt(selectedRow, 0);
+                        if (idObject != null) {
+                            int id = (int) idObject;
+                            logInfo("Fetching request-response for ID=" + id);
+                            IHttpRequestResponse messageInfo = userRequestResponseMap.get(i).get(id);
+                            if (messageInfo != null) {
+                                byte[] request = messageInfo.getRequest();
+                                byte[] response = messageInfo.getResponse();
+
+                                final int viewerIndex = i;
+
+                                SwingUtilities.invokeLater(() -> {
+                                    if (request != null) {
+                                        requestViewers[viewerIndex].setText(request);
+                                        logInfo("Request displayed for ID=" + id + " in viewer index " + viewerIndex);
                                     } else {
-                                        logError("No message info found for ID=" + id);
+                                        logError("Request is null for ID=" + id);
                                     }
-                                } else {
-                                    logError("ID object is null at selected row: " + selectedRow);
-                                }
+                                    if (response != null) {
+                                        responseViewers[viewerIndex].setText(response);
+                                        logInfo("Response displayed for ID=" + id + " in viewer index " + viewerIndex);
+                                    } else {
+                                        logError("Response is null for ID=" + id);
+                                    }
+                                });
+                            } else {
+                                logError("No message info found for ID=" + id);
                             }
-                        }
-                        if (!tableMatched) {
-                            logError("No matching table found for the source table");
+                        } else {
+                            logError("ID object is null at selected row: " + selectedRow);
                         }
                     } else {
                         logError("No row is selected");
                     }
-                } else {
-                    logError("Event source is not a JTable or associated with any JTable: " + source.getClass().getName());
+                    break; // Exit the loop after handling the event
                 }
-            } catch (Exception ex) {
-                logError("Exception occurred in valueChanged: " + ex.getMessage());
-                ex.printStackTrace();
             }
+        } catch (Exception ex) {
+            logError("Exception in valueChanged: " + ex.getMessage());
+            logError("Stack trace: " + Arrays.toString(ex.getStackTrace()));
         }
     }
+}
 
     @Override
     public String getTabCaption() {
