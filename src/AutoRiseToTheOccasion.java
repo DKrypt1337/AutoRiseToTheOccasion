@@ -2,7 +2,10 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.GridLayout;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -11,14 +14,21 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
+import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
+import javax.swing.JSeparator;
 import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTable;
@@ -32,14 +42,17 @@ import javax.swing.table.TableColumnModel;
 
 import burp.IBurpExtender;
 import burp.IBurpExtenderCallbacks;
+import burp.IContextMenuFactory;
+import burp.IContextMenuInvocation;
 import burp.IExtensionHelpers;
 import burp.IHttpListener;
 import burp.IHttpRequestResponse;
+import burp.IHttpService;
 import burp.IRequestInfo;
 import burp.ITab;
 import burp.ITextEditor;
 
-public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelectionListener {
+public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelectionListener, IContextMenuFactory {
     private IBurpExtenderCallbacks callbacks;
     private IExtensionHelpers helpers;
     private JPanel mainPanel;
@@ -55,7 +68,6 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
     private JCheckBox[] enableAuthorizationCheckBoxes;
     private JTextField[] cookieInputBoxes;
     private JTextField[] authInputBoxes;
-    private JCheckBox csrfTestCheckBox;
     private int requestCounter = 0;
     private final Map<String, IHttpRequestResponse> requestMap = new HashMap<>();
     Map<Integer, RequestResponsePair> requestResponseMap = new HashMap<>();
@@ -68,6 +80,12 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         List<int[]> authHighlights = new ArrayList<>();
     }
     private Map<Integer, ModificationDetails> highlightMap = new HashMap<>();
+
+    private JPopupMenu tablePopupMenu;
+    private JPopupMenu requestViewerPopupMenu;
+
+    // At the class level, initialize the checkbox
+    private final JCheckBox csrfTestCheckBox = new JCheckBox("Enable CSRF Testing");
 
     private void adjustColumnWidths(JTable table) {
         TableColumnModel columnModel = table.getColumnModel();
@@ -94,7 +112,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         byte[] modifiedRequest;
         byte[] originalResponse;
         byte[] modifiedResponse;
-        // Additional fields if necessary
+        IHttpService httpService;
     }
 
     // Update the modifyRequest method to track modification positions
@@ -114,7 +132,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
             String cookieHeader = null;
             
             for (int i = 0; i < headers.size(); i++) {
-                if (headers.get(i).startsWith("Cookie:")) {
+                if (headers.get(i).toLowerCase().startsWith("cookie:")) {
                     cookieHeader = headers.get(i);
                     cookieHeaderIndex = i;
                     break;
@@ -150,9 +168,14 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                     for (String userCookie : userCookies) {
                         String[] parts = userCookie.split("=", 2);
                         if (parts.length == 2) {
-                            // Only modify if cookie already exists
-                            if (cookieMap.containsKey(parts[0])) {
-                                cookieMap.put(parts[0], parts[1]);
+                            // Case-insensitive cookie name comparison
+                            String userCookieName = parts[0];
+                            Optional<String> matchingCookie = cookieMap.keySet().stream()
+                                .filter(existingName -> existingName.equalsIgnoreCase(userCookieName))
+                                .findFirst();
+                            
+                            if (matchingCookie.isPresent()) {
+                                cookieMap.put(matchingCookie.get(), parts[1]);
                                 modified = true;
                             }
                         }
@@ -207,7 +230,6 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         this.helpers = callbacks.getHelpers();
         callbacks.setExtensionName("AutoRiseToTheOccasion");
         
-        // Add immediate debug output
         callbacks.printOutput("Starting extension initialization...");
 
         SwingUtilities.invokeLater(() -> {
@@ -223,7 +245,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                 
                 callbacks.printOutput("Creating arrays for " + totalTabs + " tabs");
                 
-                // Initialize arrays
+                // Initialize arrays and UI components
                 tables = new JTable[totalTabs];
                 tableModels = new DefaultTableModel[totalTabs];
                 requestViewers = new ITextEditor[totalTabs];
@@ -235,6 +257,15 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                 enableAuthorizationCheckBoxes = new JCheckBox[userCount];
                 cookieInputBoxes = new JTextField[userCount];
                 authInputBoxes = new JTextField[userCount];
+
+                // Initialize checkboxes and text fields
+                for (int i = 0; i < userCount; i++) {
+                    roleCheckBoxes[i] = new JCheckBox("Enable Role " + (i + 1));
+                    enableCookiesCheckBoxes[i] = new JCheckBox("Enable Cookies");
+                    enableAuthorizationCheckBoxes[i] = new JCheckBox("Enable Authorization");
+                    cookieInputBoxes[i] = new JTextField(20);
+                    authInputBoxes[i] = new JTextField(20);
+                }
 
                 // Create user tabs
                 for (int i = 0; i < userCount; i++) {
@@ -316,26 +347,24 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                         responsePanel
                     );
                     requestResponseSplitPane.setResizeWeight(0.5);
-                    requestResponseSplitPane.setDividerLocation(0.5);
 
-                    JSplitPane mainSplitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(tables[i]), requestResponseSplitPane);
+                    JSplitPane mainSplitPane = new JSplitPane(
+                        JSplitPane.VERTICAL_SPLIT, 
+                        new JScrollPane(tables[i]), 
+                        requestResponseSplitPane
+                    );
                     mainSplitPane.setResizeWeight(0.33);
-                    mainSplitPane.setDividerLocation(0.33);
 
-                    userPanel.add(checkBoxPanel, BorderLayout.NORTH);
                     userPanel.add(mainSplitPane, BorderLayout.CENTER);
-
                     tabbedPane.addTab("User " + (i + 1), userPanel);
 
                     callbacks.registerHttpListener(new AutoRiseHttpListener(this, i));
                 }
 
                 callbacks.printOutput("Creating CSRF tab");
-                // Create CSRF tab
                 createCsrfTab(csrfTabIndex);
                 
                 callbacks.printOutput("Creating config tab");
-                // Create config tab
                 createConfigTab(configTabIndex);
 
                 adjustRequestResponseBoxHeight();
@@ -344,6 +373,9 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                 callbacks.addSuiteTab(this);
                 
                 callbacks.printOutput("UI setup complete");
+
+                callbacks.registerContextMenuFactory(this);
+                setupContextMenus();
             } catch (Exception e) {
                 callbacks.printError("Error during initialization: " + e.getMessage());
                 e.printStackTrace(new PrintStream(callbacks.getStderr()));
@@ -442,13 +474,78 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         
         JPanel configPanel = new JPanel(new BorderLayout());
         
-        // Create CSRF test checkbox
-        csrfTestCheckBox = new JCheckBox("Enable CSRF Testing");
-        JPanel checkboxPanel = new JPanel();
-        checkboxPanel.setBorder(BorderFactory.createTitledBorder("Configuration Options"));
-        checkboxPanel.add(csrfTestCheckBox);
+        // Create main configuration panel with vertical BoxLayout
+        JPanel mainConfigPanel = new JPanel();
+        mainConfigPanel.setLayout(new BoxLayout(mainConfigPanel, BoxLayout.Y_AXIS));
+        mainConfigPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        // CSRF Configuration Section
+        JPanel csrfPanel = new JPanel();
+        csrfPanel.setBorder(BorderFactory.createTitledBorder("CSRF Testing Configuration"));
+        csrfPanel.add(csrfTestCheckBox);
+        mainConfigPanel.add(csrfPanel);
+        mainConfigPanel.add(Box.createVerticalStrut(10));
+
+        // User Configurations Section
+        JPanel usersPanel = new JPanel();
+        usersPanel.setLayout(new BoxLayout(usersPanel, BoxLayout.Y_AXIS));
+        usersPanel.setBorder(BorderFactory.createTitledBorder("User Configurations"));
+
+        for (int i = 0; i < roleCheckBoxes.length; i++) {
+            JPanel userPanel = new JPanel();
+            userPanel.setLayout(new BoxLayout(userPanel, BoxLayout.Y_AXIS));
+            userPanel.setBorder(BorderFactory.createTitledBorder("User " + (i + 1)));
+
+            // Enable role checkbox
+            JPanel rolePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+            rolePanel.add(roleCheckBoxes[i]);
+            userPanel.add(rolePanel);
+
+            // Cookie configuration
+            JPanel cookiePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+            cookiePanel.add(enableCookiesCheckBoxes[i]);
+            cookiePanel.add(new JLabel("Cookie Value:"));
+            cookieInputBoxes[i].setPreferredSize(new Dimension(300, 25));
+            cookiePanel.add(cookieInputBoxes[i]);
+            userPanel.add(cookiePanel);
+
+            // Authorization configuration
+            JPanel authPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+            authPanel.add(enableAuthorizationCheckBoxes[i]);
+            authPanel.add(new JLabel("Authorization Value:"));
+            authInputBoxes[i].setPreferredSize(new Dimension(300, 25));
+            authPanel.add(authInputBoxes[i]);
+            userPanel.add(authPanel);
+
+            // Add separator except for last user
+            if (i < roleCheckBoxes.length - 1) {
+                userPanel.add(Box.createVerticalStrut(5));
+                userPanel.add(new JSeparator(JSeparator.HORIZONTAL));
+                userPanel.add(Box.createVerticalStrut(5));
+            }
+
+            usersPanel.add(userPanel);
+        }
+
+        // Add users panel to a scroll pane with improved scroll settings
+        JScrollPane scrollPane = new JScrollPane(mainConfigPanel);
+        scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
+        scrollPane.getViewport().setBackground(mainConfigPanel.getBackground());
         
-        configPanel.add(checkboxPanel, BorderLayout.NORTH);
+        // Enable mouse wheel scrolling
+        scrollPane.addMouseWheelListener(e -> {
+            int notches = e.getWheelRotation();
+            JScrollBar verticalScrollBar = scrollPane.getVerticalScrollBar();
+            int newValue = verticalScrollBar.getValue() + (notches * verticalScrollBar.getUnitIncrement());
+            verticalScrollBar.setValue(newValue);
+        });
+
+        mainConfigPanel.add(usersPanel);
+
+        // Add scroll pane to config panel
+        configPanel.add(scrollPane, BorderLayout.CENTER);
         
         // Initialize table components for config tab
         tableModels[configTabIndex] = new DefaultTableModel(
@@ -486,7 +583,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                 
                 // For CSRF tab (userIndex == 10), check if CSRF testing is enabled
                 if (userIndex == 10) {
-                    if (!csrfTestCheckBox.isSelected()) {
+                    if (csrfTestCheckBox == null || !csrfTestCheckBox.isSelected()) {
                         return;
                     }
                 } else if (userIndex < 10 && !roleCheckBoxes[userIndex].isSelected()) {
@@ -530,6 +627,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                             pair.originalResponse = originalResponse;
                             pair.modifiedRequest = requests[0]; // Store cookie-modified request
                             pair.modifiedResponse = cookieModifiedMessage.getResponse();
+                            pair.httpService = messageInfo.getHttpService();
                             requestResponseMap.put(id, pair);
                             
                             // Create new entry for header-modified request
@@ -540,6 +638,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                             headerPair.originalResponse = originalResponse;
                             headerPair.modifiedRequest = requests[1];
                             headerPair.modifiedResponse = headerModifiedMessage.getResponse();
+                            headerPair.httpService = messageInfo.getHttpService();
                             requestResponseMap.put(headerId, headerPair);
                             
                             // Add both entries to the table
@@ -603,6 +702,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                 pair.modifiedRequest = modifiedRequest;
                 pair.originalResponse = originalResponse;
                 pair.modifiedResponse = modifiedMessage != null ? modifiedMessage.getResponse() : null;
+                pair.httpService = messageInfo.getHttpService();
                 requestResponseMap.put(id, pair);
 
                 // Determine bypass status
@@ -769,23 +869,55 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         int csrfHeaderIndex = -1;
         int csrfCookieIndex = -1;
         String csrfCookieName = null;
+        boolean foundCsrfHeader = false;
         
         // Check headers
         for (int i = 0; i < modifiedHeaders.size(); i++) {
-            String headerLower = modifiedHeaders.get(i).toLowerCase();
-            if (csrfPatterns.stream().anyMatch(pattern -> headerLower.contains(pattern))) {
-                csrfHeaderIndex = i;
-            }
-            if (headerLower.startsWith("cookie:")) {
-                String[] cookies = modifiedHeaders.get(i).substring(8).split("; ");
-                for (String cookie : cookies) {
-                    if (csrfPatterns.stream().anyMatch(pattern -> cookie.toLowerCase().contains(pattern))) {
-                        csrfCookieIndex = i;
-                        csrfCookieName = cookie.split("=")[0];
-                        break;
+            String header = modifiedHeaders.get(i);
+            String[] headerParts = header.split(":", 2);
+            if (headerParts.length > 0) {
+                String headerName = headerParts[0].toLowerCase().trim();
+                // Check if any CSRF pattern matches the header name only
+                if (csrfPatterns.stream().anyMatch(pattern -> headerName.contains(pattern.toLowerCase()))) {
+                    csrfHeaderIndex = i;
+                    foundCsrfHeader = true;
+                }
+                if (headerName.equals("cookie")) {
+                    String[] cookies = headerParts.length > 1 ? headerParts[1].trim().split("; ") : new String[0];
+                    for (String cookie : cookies) {
+                        String cookieName = cookie.split("=", 2)[0].toLowerCase();
+                        if (csrfPatterns.stream().anyMatch(pattern -> cookieName.contains(pattern.toLowerCase()))) {
+                            csrfCookieIndex = i;
+                            csrfCookieName = cookie.split("=")[0];
+                            break;
+                        }
                     }
                 }
             }
+        }
+        
+        // If no CSRF header is found, don't attempt header modification
+        if (!foundCsrfHeader) {
+            // Only return cookie modification if a CSRF cookie exists
+            if (csrfCookieIndex != -1) {
+                String cookieHeader = modifiedHeaders.get(csrfCookieIndex);
+                String[] cookies = cookieHeader.substring(8).split("; ");
+                List<String> modifiedCookies = new ArrayList<>();
+                
+                for (String cookie : cookies) {
+                    if (cookie.startsWith(csrfCookieName)) {
+                        String[] parts = cookie.split("=", 2);
+                        if (parts.length == 2) {
+                            modifiedCookies.add(parts[0] + "=" + modifyTokenValue(parts[1]));
+                        }
+                    } else {
+                        modifiedCookies.add(cookie);
+                    }
+                }
+                modifiedHeaders.set(csrfCookieIndex, "Cookie: " + String.join("; ", modifiedCookies));
+                return helpers.buildHttpMessage(modifiedHeaders, body.getBytes());
+            }
+            return null;
         }
         
         // If both header and cookie CSRF tokens exist, create two different requests
@@ -800,7 +932,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                 if (cookie.startsWith(csrfCookieName)) {
                     String[] parts = cookie.split("=", 2);
                     if (parts.length == 2) {
-                        modifiedCookies.add(parts[0] + "=" + parts[1] + "_bypass");
+                        modifiedCookies.add(parts[0] + "=" + modifyTokenValue(parts[1]));
                     }
                 } else {
                     modifiedCookies.add(cookie);
@@ -813,7 +945,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
             List<String> headerModifiedHeaders = new ArrayList<>(headers);
             String[] headerParts = headerModifiedHeaders.get(csrfHeaderIndex).split(": ", 2);
             if (headerParts.length == 2) {
-                headerModifiedHeaders.set(csrfHeaderIndex, headerParts[0] + ": " + headerParts[1] + "_bypass");
+                headerModifiedHeaders.set(csrfHeaderIndex, headerParts[0] + ": " + modifyTokenValue(headerParts[1]));
             }
             byte[] headerModifiedRequest = helpers.buildHttpMessage(headerModifiedHeaders, body.getBytes());
             
@@ -828,7 +960,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         if (csrfHeaderIndex != -1) {
             String[] parts = modifiedHeaders.get(csrfHeaderIndex).split(": ", 2);
             if (parts.length == 2) {
-                modifiedHeaders.set(csrfHeaderIndex, parts[0] + ": " + parts[1] + "_bypass");
+                modifiedHeaders.set(csrfHeaderIndex, parts[0] + ": " + modifyTokenValue(parts[1]));
                 modified = true;
             }
         }
@@ -846,7 +978,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
                 if (isCsrfCookie) {
                     String[] parts = cookie.split("=", 2);
                     if (parts.length == 2) {
-                        modifiedCookies.add(parts[0] + "=" + parts[1] + "_bypass");
+                        modifiedCookies.add(parts[0] + "=" + modifyTokenValue(parts[1]));
                         modified = true;
                     } else {
                         modifiedCookies.add(cookie);
@@ -893,5 +1025,196 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         }
 
         return String.join(", ", locations);
+    }
+
+    private void setupContextMenus() {
+        // Setup table context menu
+        for (int i = 0; i < tables.length; i++) {
+            final int tabIndex = i;
+            tables[i].addMouseListener(new MouseAdapter() {
+                @Override
+                public void mousePressed(MouseEvent e) {
+                    if (e.isPopupTrigger()) {
+                        int row = tables[tabIndex].rowAtPoint(e.getPoint());
+                        if (row >= 0) {
+                            tables[tabIndex].setRowSelectionInterval(row, row);
+                            showTableContextMenu(e, tabIndex, row);
+                        }
+                    }
+                }
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+                    if (e.isPopupTrigger()) {
+                        int row = tables[tabIndex].rowAtPoint(e.getPoint());
+                        if (row >= 0) {
+                            tables[tabIndex].setRowSelectionInterval(row, row);
+                            showTableContextMenu(e, tabIndex, row);
+                        }
+                    }
+                }
+            });
+
+            // Setup request viewer context menu only
+            requestViewers[i].getComponent().addMouseListener(new MouseAdapter() {
+                @Override
+                public void mousePressed(MouseEvent e) {
+                    if (e.isPopupTrigger()) {
+                        showRequestViewerContextMenu(e, tabIndex, true, false);
+                    }
+                }
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+                    if (e.isPopupTrigger()) {
+                        showRequestViewerContextMenu(e, tabIndex, true, false);
+                    }
+                }
+            });
+
+            modifiedRequestViewers[i].getComponent().addMouseListener(new MouseAdapter() {
+                @Override
+                public void mousePressed(MouseEvent e) {
+                    if (e.isPopupTrigger()) {
+                        showRequestViewerContextMenu(e, tabIndex, true, true);
+                    }
+                }
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+                    if (e.isPopupTrigger()) {
+                        showRequestViewerContextMenu(e, tabIndex, true, true);
+                    }
+                }
+            });
+        }
+    }
+
+    private void showTableContextMenu(MouseEvent e, int tabIndex, int row) {
+        JPopupMenu menu = new JPopupMenu();
+        int id = (int) tableModels[tabIndex].getValueAt(row, 0);
+        RequestResponsePair pair = requestResponseMap.get(id);
+        
+        if (pair != null && pair.httpService != null) {
+            JMenuItem sendToRepeater = new JMenuItem("Send to Repeater");
+            sendToRepeater.addActionListener(ev -> {
+                try {
+                    callbacks.printOutput("Sending to Repeater - ID: " + id);
+                    callbacks.sendToRepeater(
+                        pair.httpService.getHost(),
+                        pair.httpService.getPort(),
+                        pair.httpService.getProtocol().equalsIgnoreCase("https"),
+                        pair.originalRequest,
+                        "AutoRise #" + id
+                    );
+                } catch (Exception ex) {
+                    callbacks.printError("Error sending to Repeater: " + ex.getMessage());
+                    ex.printStackTrace(new PrintStream(callbacks.getStderr()));
+                }
+            });
+            menu.add(sendToRepeater);
+
+            JMenuItem sendToIntruder = new JMenuItem("Send to Intruder");
+            sendToIntruder.addActionListener(ev -> {
+                try {
+                    callbacks.printOutput("Sending to Intruder - ID: " + id);
+                    callbacks.sendToIntruder(
+                        pair.httpService.getHost(),
+                        pair.httpService.getPort(),
+                        pair.httpService.getProtocol().equalsIgnoreCase("https"),
+                        pair.originalRequest
+                    );
+                } catch (Exception ex) {
+                    callbacks.printError("Error sending to Intruder: " + ex.getMessage());
+                    ex.printStackTrace(new PrintStream(callbacks.getStderr()));
+                }
+            });
+            menu.add(sendToIntruder);
+
+            menu.show(e.getComponent(), e.getX(), e.getY());
+        }
+    }
+
+    private void showRequestViewerContextMenu(MouseEvent e, int tabIndex, boolean isRequest, boolean isModified) {
+        int row = tables[tabIndex].getSelectedRow();
+        if (row >= 0) {
+            int id = (int) tableModels[tabIndex].getValueAt(row, 0);
+            RequestResponsePair pair = requestResponseMap.get(id);
+            
+            if (pair != null && pair.httpService != null) {
+                JPopupMenu menu = new JPopupMenu();
+                
+                JMenuItem sendToRepeater = new JMenuItem("Send to Repeater");
+                sendToRepeater.addActionListener(ev -> {
+                    try {
+                        byte[] content = isRequest ? 
+                            (isModified ? pair.modifiedRequest : pair.originalRequest) :
+                            (isModified ? pair.modifiedResponse : pair.originalResponse);
+                        
+                        callbacks.sendToRepeater(
+                            pair.httpService.getHost(),
+                            pair.httpService.getPort(),
+                            pair.httpService.getProtocol().equalsIgnoreCase("https"),
+                            content,
+                            "AutoRise #" + id + (isModified ? " (Modified)" : "")
+                        );
+                    } catch (Exception ex) {
+                        callbacks.printError("Error sending to Repeater: " + ex.getMessage());
+                        ex.printStackTrace(new PrintStream(callbacks.getStderr()));
+                    }
+                });
+                menu.add(sendToRepeater);
+
+                if (isRequest) {
+                    JMenuItem sendToIntruder = new JMenuItem("Send to Intruder");
+                    sendToIntruder.addActionListener(ev -> {
+                        try {
+                            byte[] content = isModified ? pair.modifiedRequest : pair.originalRequest;
+                            callbacks.sendToIntruder(
+                                pair.httpService.getHost(),
+                                pair.httpService.getPort(),
+                                pair.httpService.getProtocol().equalsIgnoreCase("https"),
+                                content
+                            );
+                        } catch (Exception ex) {
+                            callbacks.printError("Error sending to Intruder: " + ex.getMessage());
+                            ex.printStackTrace(new PrintStream(callbacks.getStderr()));
+                        }
+                    });
+                    menu.add(sendToIntruder);
+                }
+
+                menu.show(e.getComponent(), e.getX(), e.getY());
+            }
+        }
+    }
+
+    @Override
+    public List<JMenuItem> createMenuItems(IContextMenuInvocation invocation) {
+        return null; // We're handling our own context menus
+    }
+
+    private String modifyTokenValue(String originalValue) {
+        if (originalValue == null || originalValue.isEmpty()) {
+            return originalValue;
+        }
+        
+        // Remove last character and replace with a different one
+        char lastChar = originalValue.charAt(originalValue.length() - 1);
+        char replacementChar;
+        
+        // Choose a replacement that's different from the original
+        if (Character.isDigit(lastChar)) {
+            // If it's a number, replace with a different number
+            replacementChar = (char)('0' + ((lastChar - '0' + 1) % 10));
+        } else if (Character.isLetter(lastChar)) {
+            // If it's a letter, replace with a different letter
+            replacementChar = (char)('a' + ((lastChar - 'a' + 1) % 26));
+        } else {
+            // For special characters, use 'x'
+            replacementChar = 'x';
+        }
+        
+        return originalValue.substring(0, originalValue.length() - 1) + replacementChar;
     }
 }
