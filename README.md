@@ -24,18 +24,42 @@ AutoRiseToTheOccasion is a Burp Suite extension that automates the testing of Ro
   - Headers
   - Cookies
   - Request body
+* Intelligent token manipulation:
+  - Maintains token length
+  - Smart character replacement
+  - Preserves token format
 * Multiple bypass attempt methods
 * Visual results showing token location and bypass status
-* Color-coded success/failure indicators
+* Comprehensive reporting:
+  - Export detailed CSRF test results
+  - Categorized findings by token location
+  - Successful and failed bypass attempts
+  - Clear overview of tested endpoints
 
 ### UI Features
+* Centralized configuration tab:
+  - User role settings
+  - Cookie and Authorization configurations
+  - CSRF testing options
+  - Report generation
 * Side-by-side request/response comparison
 * Separate tabs for each user role
 * Dedicated CSRF testing tab
-* Configuration tab for global settings
 * Color-coded results for easy interpretation
 * Real-time request processing
 * Detailed logging of modifications
+
+### Reporting Features
+* Export comprehensive CSRF test reports
+* Report sections include:
+  - URLs with CSRF tokens in cookies
+  - URLs with CSRF tokens in headers
+  - URLs with tokens in both locations
+  - Successfully bypassed endpoints
+  - Failed bypass attempts
+  - Categorized results by token type
+* Easy-to-read text format
+* Save reports to custom locations
 
 ## Installation
 
@@ -47,9 +71,10 @@ AutoRiseToTheOccasion is a Burp Suite extension that automates the testing of Ro
 
 ## Usage
 
-1. **Configure User Roles**:
+1. **Configure User Roles** (Configuration Tab):
    - Enter cookie values and/or Authorization headers for each user role
    - Enable/disable specific roles as needed
+   - Configure CSRF testing options
 
 2. **Enable Testing Types**:
    - Toggle cookie testing per role
@@ -60,6 +85,11 @@ AutoRiseToTheOccasion is a Burp Suite extension that automates the testing of Ro
    - Browse the target application normally
    - The extension automatically processes requests based on your configuration
    - Review results in the respective tabs
+
+4. **Generate Reports**:
+   - Click "Export CSRF Report" in the configuration tab
+   - Choose save location
+   - Review comprehensive test results
 
 ## How to Compile
 
@@ -109,6 +139,13 @@ For bugs, feature requests, or questions:
 3. Include steps to reproduce if reporting a bug
 
 ## Changelog
+
+### v1.1.0
+- Added CSRF testing report generation
+- Improved token manipulation logic
+- Enhanced configuration UI
+- Added centralized user role management
+- Fixed case sensitivity issues
 
 ### v1.0.0
 - Initial release
