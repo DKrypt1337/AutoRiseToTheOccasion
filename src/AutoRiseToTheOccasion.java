@@ -6,7 +6,9 @@ import java.awt.FlowLayout;
 import java.awt.GridLayout;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.io.File;
 import java.io.PrintStream;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -21,9 +23,12 @@ import java.util.stream.Collectors;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollBar;
@@ -68,6 +73,7 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
     private JCheckBox[] enableAuthorizationCheckBoxes;
     private JTextField[] cookieInputBoxes;
     private JTextField[] authInputBoxes;
+    private JButton exportCsrfReportButton;
     private int requestCounter = 0;
     private final Map<String, IHttpRequestResponse> requestMap = new HashMap<>();
     Map<Integer, RequestResponsePair> requestResponseMap = new HashMap<>();
@@ -480,9 +486,14 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         mainConfigPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
         // CSRF Configuration Section
-        JPanel csrfPanel = new JPanel();
+        JPanel csrfPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         csrfPanel.setBorder(BorderFactory.createTitledBorder("CSRF Testing Configuration"));
         csrfPanel.add(csrfTestCheckBox);
+        
+        exportCsrfReportButton = new JButton("Export CSRF Report");
+        exportCsrfReportButton.addActionListener(e -> exportCsrfReport());
+        csrfPanel.add(exportCsrfReportButton);
+        
         mainConfigPanel.add(csrfPanel);
         mainConfigPanel.add(Box.createVerticalStrut(10));
 
@@ -1216,5 +1227,120 @@ public class AutoRiseToTheOccasion implements IBurpExtender, ITab, ListSelection
         }
         
         return originalValue.substring(0, originalValue.length() - 1) + replacementChar;
+    }
+
+    private void exportCsrfReport() {
+        try {
+            JFileChooser fileChooser = new JFileChooser();
+            fileChooser.setDialogTitle("Save CSRF Report");
+            fileChooser.setSelectedFile(new File("csrf_report.txt"));
+            
+            if (fileChooser.showSaveDialog(mainPanel) == JFileChooser.APPROVE_OPTION) {
+                File file = fileChooser.getSelectedFile();
+                
+                // Collect data
+                Set<String> cookieUrls = new HashSet<>();
+                Set<String> headerUrls = new HashSet<>();
+                Set<String> bothUrls = new HashSet<>();
+                Set<String> bypassedCookieUrls = new HashSet<>();
+                Set<String> bypassedHeaderUrls = new HashSet<>();
+                Set<String> failedCookieUrls = new HashSet<>();
+                Set<String> failedHeaderUrls = new HashSet<>();
+                Set<String> failedBothUrls = new HashSet<>();
+                
+                // Get data from CSRF tab (index 10)
+                DefaultTableModel model = tableModels[10];
+                for (int i = 0; i < model.getRowCount(); i++) {
+                    String url = (String) model.getValueAt(i, 2);
+                    String location = (String) model.getValueAt(i, 3);
+                    String bypassed = (String) model.getValueAt(i, 4);
+                    
+                    // Categorize by location
+                    if (location.contains("Cookie") && location.contains("Header")) {
+                        bothUrls.add(url);
+                        if (bypassed.contains("successful")) {
+                            bypassedCookieUrls.add(url);
+                            bypassedHeaderUrls.add(url);
+                        } else if (bypassed.contains("failed")) {
+                            failedBothUrls.add(url);
+                        }
+                    } else if (location.contains("Cookie")) {
+                        cookieUrls.add(url);
+                        if (bypassed.contains("successful")) {
+                            bypassedCookieUrls.add(url);
+                        } else if (bypassed.contains("failed")) {
+                            failedCookieUrls.add(url);
+                        }
+                    } else if (location.contains("Header")) {
+                        headerUrls.add(url);
+                        if (bypassed.contains("successful")) {
+                            bypassedHeaderUrls.add(url);
+                        } else if (bypassed.contains("failed")) {
+                            failedHeaderUrls.add(url);
+                        }
+                    }
+                }
+                
+                // Generate report
+                StringBuilder report = new StringBuilder();
+                report.append("CSRF Testing Report\n");
+                report.append("=================\n\n");
+                
+                report.append("Tested URLs where CSRF token was present:\n");
+                report.append("----------------------------------------\n\n");
+                
+                report.append("URLs with CSRF in Cookie only:\n");
+                cookieUrls.forEach(url -> report.append("- ").append(url).append("\n"));
+                report.append("\n");
+                
+                report.append("URLs with CSRF in Header only:\n");
+                headerUrls.forEach(url -> report.append("- ").append(url).append("\n"));
+                report.append("\n");
+                
+                report.append("URLs with CSRF in both Cookie and Header:\n");
+                bothUrls.forEach(url -> report.append("- ").append(url).append("\n"));
+                report.append("\n");
+                
+                report.append("Successfully Bypassed URLs:\n");
+                report.append("-------------------------\n\n");
+                
+                report.append("Cookie-based CSRF bypassed:\n");
+                bypassedCookieUrls.forEach(url -> report.append("- ").append(url).append("\n"));
+                report.append("\n");
+                
+                report.append("Header-based CSRF bypassed:\n");
+                bypassedHeaderUrls.forEach(url -> report.append("- ").append(url).append("\n"));
+                report.append("\n");
+                
+                report.append("Failed Bypass Attempts:\n");
+                report.append("----------------------\n\n");
+                
+                report.append("Cookie-based CSRF not bypassed:\n");
+                failedCookieUrls.forEach(url -> report.append("- ").append(url).append("\n"));
+                report.append("\n");
+                
+                report.append("Header-based CSRF not bypassed:\n");
+                failedHeaderUrls.forEach(url -> report.append("- ").append(url).append("\n"));
+                report.append("\n");
+                
+                report.append("Both Cookie and Header CSRF not bypassed:\n");
+                failedBothUrls.forEach(url -> report.append("- ").append(url).append("\n"));
+                
+                // Write to file
+                Files.write(file.toPath(), report.toString().getBytes());
+                
+                // Show success message
+                JOptionPane.showMessageDialog(mainPanel, 
+                    "CSRF report exported successfully to:\n" + file.getAbsolutePath(),
+                    "Export Success",
+                    JOptionPane.INFORMATION_MESSAGE);
+            }
+        } catch (Exception e) {
+            callbacks.printError("Error exporting CSRF report: " + e.getMessage());
+            JOptionPane.showMessageDialog(mainPanel,
+                "Error exporting CSRF report: " + e.getMessage(),
+                "Export Error",
+                JOptionPane.ERROR_MESSAGE);
+        }
     }
 }
